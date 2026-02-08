@@ -347,6 +347,55 @@ class PendingApprovalsResponse(BaseModel):
     total: int
 
 
+class AgentOutput(BaseModel):
+    """Output from an agent for review."""
+    
+    agent_name: str
+    output_type: str  # architecture_plan, code, user_stories, etc.
+    content: Any
+    generated_at: str
+
+
+class BreakpointDetails(BaseModel):
+    """Details about the current breakpoint."""
+    
+    checkpoint_name: str
+    reason: str
+    context: dict[str, Any] = {}
+    requires_approval: bool = True
+
+
+class WorkflowStateResponse(BaseModel):
+    """
+    Full workflow state for dashboard visualization.
+    
+    Used by the Decision Modal to display agent output
+    and provide approve/reject actions.
+    """
+    
+    workflow_id: str
+    project_id: str
+    status: str
+    current_phase: str
+    
+    # Agent output for review (e.g., Architecture Plan)
+    agent_output: Optional[AgentOutput] = None
+    
+    # Breakpoint information
+    breakpoint: Optional[BreakpointDetails] = None
+    
+    # Approval history
+    approvals: list[dict[str, Any]] = []
+    
+    # Progress tracking
+    progress_percent: int = 0
+    phase_results: dict[str, Any] = {}
+    
+    # Timestamps
+    started_at: str
+    updated_at: str
+
+
 def _get_phase_status(workflow: dict, phase: str) -> str:
     """Determine the status of a phase in a workflow."""
     current = workflow["current_phase"]
@@ -439,6 +488,68 @@ async def get_workflow_graph(workflow_id: str):
         current_phase=workflow["current_phase"],
         pending_approval=workflow["status"] in ["paused", "awaiting_approval"],
         checkpoint=workflow.get("metadata", {}).get("approval_checkpoint"),
+    )
+
+
+@router.get("/{workflow_id}/state", response_model=WorkflowStateResponse)
+async def get_workflow_state(workflow_id: str):
+    """
+    Get full workflow state for dashboard visualization.
+    
+    Returns comprehensive state including:
+    - Current phase and status
+    - Agent output for review (e.g., Architecture Plan, Code)
+    - Breakpoint details when paused
+    - Approval history
+    - Progress tracking
+    
+    Used by the React Dashboard Decision Modal.
+    """
+    workflow = _workflows.get(workflow_id)
+    
+    if not workflow:
+        raise HTTPException(status_code=404, detail=f"Workflow not found: {workflow_id}")
+    
+    # Build agent output if available
+    agent_output = None
+    phase_results = workflow.get("phase_results", {})
+    current_phase = workflow["current_phase"]
+    
+    if current_phase in phase_results:
+        result = phase_results[current_phase]
+        agent_output = AgentOutput(
+            agent_name=result.get("agent", f"{current_phase}_agent"),
+            output_type=result.get("output_type", current_phase),
+            content=result.get("output", result.get("content", {})),
+            generated_at=result.get("completed_at", workflow["updated_at"]),
+        )
+    
+    # Build breakpoint details if paused
+    breakpoint_details = None
+    if workflow["status"] in ["paused", "awaiting_approval"]:
+        metadata = workflow.get("metadata", {})
+        breakpoint_details = BreakpointDetails(
+            checkpoint_name=metadata.get("approval_checkpoint", current_phase),
+            reason=metadata.get("pause_reason", "human_approval_required"),
+            context={
+                "phase": current_phase,
+                "task_description": workflow.get("task_description", ""),
+            },
+            requires_approval=True,
+        )
+    
+    return WorkflowStateResponse(
+        workflow_id=workflow_id,
+        project_id=workflow["project_id"],
+        status=workflow["status"],
+        current_phase=current_phase,
+        agent_output=agent_output,
+        breakpoint=breakpoint_details,
+        approvals=workflow.get("approvals", []),
+        progress_percent=workflow.get("progress_percent", 0),
+        phase_results=phase_results,
+        started_at=workflow["started_at"],
+        updated_at=workflow["updated_at"],
     )
 
 

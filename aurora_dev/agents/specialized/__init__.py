@@ -34,6 +34,15 @@ from aurora_dev.agents.specialized.validator import ValidatorAgent
 from aurora_dev.agents.specialized.devops import DevOpsAgent
 from aurora_dev.agents.specialized.documentation import DocumentationAgent
 from aurora_dev.agents.specialized.monitoring import MonitoringAgent
+from aurora_dev.agents.specialized.impl import (
+    EnhancedArchitectAgent,
+    EnhancedDeveloperAgent,
+    EnhancedProductAnalystAgent,
+    DeveloperType,
+    SystemDesign,
+    ToolError,
+    UserStory,
+)
 
 
 __all__ = [
@@ -62,4 +71,13 @@ __all__ = [
     "DevOpsAgent",
     "DocumentationAgent",
     "MonitoringAgent",
+    # Enhanced Agents (with self-correction)
+    "EnhancedArchitectAgent",
+    "EnhancedDeveloperAgent",
+    "EnhancedProductAnalystAgent",
+    "DeveloperType",
+    "SystemDesign",
+    "ToolError",
+    "UserStory",
 ]
+
