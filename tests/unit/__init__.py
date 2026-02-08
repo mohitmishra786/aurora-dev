@@ -1,1 +1,1 @@
-"""Unit tests package for AURORA-DEV."""
+"""Unit tests package."""

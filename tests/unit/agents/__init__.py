@@ -1,1 +1,1 @@
-"""Unit tests for agent subpackage."""
+"""Agent unit tests package."""

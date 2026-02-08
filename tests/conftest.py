@@ -1,143 +1,124 @@
 """
-Pytest configuration and fixtures for AURORA-DEV tests.
-
-This module provides shared fixtures for database, Redis, and configuration testing.
+Pytest configuration and shared fixtures.
 """
-import os
 import pytest
+from unittest.mock import MagicMock, patch
 from typing import Generator
-from unittest.mock import patch
-
-
-# Set test environment before any imports
-os.environ["ENVIRONMENT"] = "test"
-os.environ["DEBUG"] = "True"
-os.environ["LOG_LEVEL"] = "DEBUG"
-os.environ["LOG_FORMAT"] = "text"
 
 
 @pytest.fixture(scope="session")
-def test_settings():
+def mock_anthropic_client() -> Generator:
     """
-    Create test settings with overridden values.
+    Session-scoped mock for Anthropic client.
     
-    This fixture patches the settings to use test-specific configuration.
+    Provides a consistent mock across all tests to avoid
+    making actual API calls.
     """
-    from aurora_dev.core.config import Settings
+    with patch("aurora_dev.agents.base_agent.Anthropic") as mock:
+        mock_client = MagicMock()
+        mock.return_value = mock_client
+        
+        # Standard successful response
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="Mock response")]
+        mock_response.usage.input_tokens = 100
+        mock_response.usage.output_tokens = 50
+        mock_response.usage.cache_creation_input_tokens = 0
+        mock_response.usage.cache_read_input_tokens = 0
+        mock_response.model = "claude-sonnet-4-20250514"
+        mock_response.stop_reason = "end_turn"
+        
+        mock_client.messages.create.return_value = mock_response
+        
+        yield mock
+
+
+@pytest.fixture(scope="function")
+def mock_redis() -> Generator:
+    """
+    Function-scoped mock for Redis client.
     
-    test_env = {
-        "ENVIRONMENT": "test",
-        "DEBUG": "True",
-        "LOG_LEVEL": "DEBUG",
-        "LOG_FORMAT": "text",
-        "DATABASE_URL": "postgresql://aurora:dev_password@localhost:5432/aurora_dev_test",
-        "REDIS_URL": "redis://localhost:6379/1",  # Use DB 1 for tests
+    Each test gets a fresh Redis mock to avoid state bleeding.
+    """
+    with patch("redis.Redis") as mock:
+        mock_client = MagicMock()
+        mock.return_value = mock_client
+        
+        # Basic key-value operations
+        _store = {}
+        
+        def mock_get(key):
+            return _store.get(key)
+        
+        def mock_set(key, value, *args, **kwargs):
+            _store[key] = value
+            return True
+        
+        def mock_delete(*keys):
+            count = 0
+            for key in keys:
+                if key in _store:
+                    del _store[key]
+                    count += 1
+            return count
+        
+        mock_client.get.side_effect = mock_get
+        mock_client.set.side_effect = mock_set
+        mock_client.delete.side_effect = mock_delete
+        
+        # Pub/sub
+        mock_pubsub = MagicMock()
+        mock_client.pubsub.return_value = mock_pubsub
+        
+        yield mock_client
+
+
+@pytest.fixture
+def sample_task_payload() -> dict:
+    """Sample task payload for testing."""
+    return {
+        "task_id": "test-task-001",
+        "operation": "implement",
+        "agent_type": "backend",
+        "parameters": {
+            "component": "user_service",
+            "requirements": ["CRUD", "validation"],
+        },
+        "context": {
+            "project_id": "proj-123",
+            "phase": "implementation",
+        },
     }
-    
-    with patch.dict(os.environ, test_env):
-        settings = Settings()
-        yield settings
 
 
-@pytest.fixture(scope="function")
-def mock_settings(test_settings):
-    """
-    Mock get_settings to return test settings.
-    
-    Use this fixture when you need to control settings in a test.
-    """
-    from aurora_dev.core import config
-    
-    with patch.object(config, "get_settings", return_value=test_settings):
-        # Clear the cache
-        config.get_settings.cache_clear()
-        yield test_settings
-        config.get_settings.cache_clear()
+@pytest.fixture
+def sample_agent_config() -> dict:
+    """Sample agent configuration for testing."""
+    return {
+        "name": "TestAgent",
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "temperature": 0.7,
+        "enable_cache": True,
+        "max_retries": 3,
+    }
 
 
-@pytest.fixture(scope="function")
-def db_session(test_settings):
-    """
-    Create a database session for testing.
-    
-    This fixture creates all tables before the test and drops them after.
-    Requires PostgreSQL to be running.
-    """
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
-    from aurora_dev.infrastructure.database.models import Base
-    
-    # Use test database
-    engine = create_engine(test_settings.database.url)
-    
-    # Create all tables
-    Base.metadata.create_all(engine)
-    
-    # Create session
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    
-    try:
-        yield session
-    finally:
-        session.close()
-        # Drop all tables after test
-        Base.metadata.drop_all(engine)
-        engine.dispose()
-
-
-@pytest.fixture(scope="function")
-def redis_client(test_settings):
-    """
-    Create a Redis client for testing.
-    
-    This fixture uses a separate Redis database (DB 1) for tests
-    and flushes it after each test.
-    Requires Redis to be running.
-    """
-    import redis
-    
-    client = redis.Redis.from_url(
-        test_settings.redis.url,
-        decode_responses=True,
+# Markers for test categorization
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line(
+        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
-    
-    # Flush the test database before test
-    client.flushdb()
-    
-    try:
-        yield client
-    finally:
-        # Flush after test
-        client.flushdb()
-        client.close()
-
-
-@pytest.fixture(scope="function")
-def logger():
-    """Create a test logger."""
-    from aurora_dev.core.logging import get_logger
-    
-    return get_logger("test")
-
-
-@pytest.fixture(scope="function")
-def sample_project_data():
-    """Sample project data for testing."""
-    return {
-        "name": "Test Project",
-        "description": "A test project for unit testing",
-        "repository_url": "https://github.com/test/project",
-    }
-
-
-@pytest.fixture(scope="function")
-def sample_task_data():
-    """Sample task data for testing."""
-    return {
-        "name": "Test Task",
-        "description": "A test task for unit testing",
-        "priority": 5,
-        "complexity_score": 3,
-        "estimated_duration_seconds": 3600,
-    }
+    config.addinivalue_line(
+        "markers", "integration: marks tests as integration tests"
+    )
+    config.addinivalue_line(
+        "markers", "unit: marks tests as unit tests"
+    )
+    config.addinivalue_line(
+        "markers", "requires_redis: marks tests that require Redis"
+    )
+    config.addinivalue_line(
+        "markers", "requires_api_key: marks tests that require API key"
+    )
