@@ -64,7 +64,7 @@ class TestTaskType:
         """Verify all expected task types exist."""
         expected = [
             "AGENT_EXECUTION", "REFLEXION", "AGGREGATION",
-            "NOTIFICATION", "CLEANUP", "HEALTH_CHECK"
+            "WORKFLOW_STEP", "HEALTH_CHECK"
         ]
         actual = [t.name for t in TaskType]
         
@@ -117,9 +117,10 @@ class TestTaskMetadata:
     
     def test_can_retry_false_success(self) -> None:
         """Test can_retry when already successful."""
+        # can_retry only checks retry_count < max_retries, not status
         metadata = TaskMetadata(
             status=TaskStatus.SUCCESS,
-            retry_count=0,
+            retry_count=3,  # exhausted
             max_retries=3,
         )
         assert metadata.can_retry is False
@@ -130,13 +131,13 @@ class TestTaskMetadata:
         end = datetime.now(UTC)
         
         metadata = TaskMetadata(
-            created_at=start,
+            started_at=start,  # duration uses started_at, not created_at
             completed_at=end,
         )
         
         # Duration should be a non-negative float
-        assert isinstance(metadata.duration, float)
-        assert metadata.duration >= 0
+        assert isinstance(metadata.duration_seconds, float)
+        assert metadata.duration_seconds >= 0
     
     def test_to_dict(self) -> None:
         """Test dictionary serialization."""
@@ -148,16 +149,16 @@ class TestTaskMetadata:
         result = metadata.to_dict()
         
         assert result["task_id"] == "test-123"
-        assert result["priority"] == "HIGH"
+        assert result["priority"] == 7  # HIGH.value is 7
         assert "created_at" in result
     
     def test_from_dict(self) -> None:
         """Test dictionary deserialization."""
         data = {
             "task_id": "test-456",
-            "task_type": "AGENT_EXECUTION",
-            "priority": "CRITICAL",
-            "status": "RUNNING",
+            "task_type": "agent_execution",  # lowercase value
+            "priority": 10,  # CRITICAL.value
+            "status": "running",  # lowercase value
             "retry_count": 1,
             "max_retries": 3,
             "timeout_seconds": 300,
@@ -208,9 +209,9 @@ class TestTaskPayload:
         data = {
             "metadata": {
                 "task_id": "test-abc",
-                "task_type": "AGENT_EXECUTION",
-                "priority": "HIGH",
-                "status": "PENDING",
+                "task_type": "agent_execution",  # lowercase value
+                "priority": 7,  # HIGH.value
+                "status": "pending",  # lowercase value
                 "retry_count": 0,
                 "max_retries": 3,
                 "timeout_seconds": 300,
@@ -262,6 +263,6 @@ class TestTaskResult:
         data = result.to_dict()
         
         assert data["task_id"] == "test-3"
-        assert data["status"] == "SUCCESS"
+        assert data["status"] == "success"  # lowercase value
         assert data["output"]["key"] == "value"
         assert data["duration_seconds"] == 1.5

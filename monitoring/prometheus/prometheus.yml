@@ -1,0 +1,54 @@
+# Prometheus configuration for Aurora Dev
+# Scrapes metrics from FastAPI backend and infrastructure services
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'aurora-dev'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files: []
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Aurora Dev FastAPI application
+  - job_name: 'aurora-api'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['aurora-api:8000']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'aurora-api'
+
+  # Redis metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'redis'
+
+  # PostgreSQL metrics
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'postgres'
+
+  # Node exporter for host metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']

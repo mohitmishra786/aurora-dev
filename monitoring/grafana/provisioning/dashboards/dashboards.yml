@@ -1,8 +1,7 @@
-# Grafana Dashboard Provisioning
 apiVersion: 1
 
 providers:
-  - name: 'AURORA-DEV Dashboards'
+  - name: 'Aurora Dev Dashboards'
     orgId: 1
     folder: ''
     type: file

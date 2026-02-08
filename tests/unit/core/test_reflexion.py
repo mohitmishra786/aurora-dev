@@ -1,16 +1,23 @@
 """
 Unit tests for Reflexion Engine.
 
-Tests reflection generation, pattern library, and retry context.
+Tests ReflexionEngine, Reflection dataclass, and pattern management.
 """
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, AsyncMock
+from datetime import datetime
 
 from aurora_dev.core.reflexion import (
     ReflexionEngine,
     Reflection,
-    ReflexionPattern,
-    PatternLibrary,
+    RootCause,
+    IncorrectAssumption,
+    ImprovedStrategy,
+    LessonLearned,
+    ReflexionTrigger,
+    TaskContext,
+    AttemptResult,
+    RetryContext,
 )
 
 
@@ -20,212 +27,228 @@ class TestReflection:
     def test_initialization(self) -> None:
         """Test reflection initialization."""
         reflection = Reflection(
+            reflection_id="ref-1",
             task_id="task-1",
-            agent_role="backend",
-            original_output="original code",
-            analysis="The code has a bug",
-            improvements=["Fix null check", "Add error handling"],
-            confidence_score=0.85,
+            agent_id="agent-1",
+            attempt_number=1,
+            trigger=ReflexionTrigger.TEST_FAILURE,
+            timestamp=datetime.now(),
+            root_cause=RootCause(
+                technical="Null pointer exception",
+                reasoning="Missing null check",
+            ),
+            incorrect_assumptions=[
+                IncorrectAssumption(
+                    assumption="Input was always valid",
+                    why_wrong="External data can be null",
+                    correct_approach="Add null checks",
+                )
+            ],
+            improved_strategy=ImprovedStrategy(
+                approach="Add validation",
+                implementation_steps=["Add null check", "Add tests"],
+                validation_plan="Run unit tests",
+            ),
+            lessons_learned=[
+                LessonLearned(
+                    lesson="Always validate inputs",
+                    applicability="All input handlers",
+                    pattern_name="input_validation",
+                )
+            ],
+            task_description="Implement user endpoint",
+            approach_taken="Direct implementation",
+            code_produced=None,
+            test_results=None,
+            errors=None,
+            performance_metrics=None,
         )
         
         assert reflection.task_id == "task-1"
-        assert reflection.agent_role == "backend"
-        assert reflection.confidence_score == 0.85
-        assert len(reflection.improvements) == 2
+        assert reflection.agent_id == "agent-1"
+        assert reflection.attempt_number == 1
+        assert reflection.trigger == ReflexionTrigger.TEST_FAILURE
     
-    def test_is_high_confidence(self) -> None:
-        """Test high confidence check."""
-        high = Reflection(
-            task_id="t1",
-            agent_role="backend",
-            original_output="",
-            analysis="",
-            improvements=[],
-            confidence_score=0.9,
+    def test_to_dict(self) -> None:
+        """Test conversion to dictionary."""
+        reflection = Reflection(
+            reflection_id="ref-1",
+            task_id="task-1",
+            agent_id="agent-1",
+            attempt_number=1,
+            trigger=ReflexionTrigger.API_ERROR,
+            timestamp=datetime.now(),
+            root_cause=RootCause(technical="Error", reasoning="Reason"),
+            incorrect_assumptions=[],
+            improved_strategy=ImprovedStrategy(
+                approach="Retry", implementation_steps=[], validation_plan=""
+            ),
+            lessons_learned=[],
+            task_description="",
+            approach_taken="",
+            code_produced=None,
+            test_results=None,
+            errors=None,
+            performance_metrics=None,
         )
         
-        low = Reflection(
-            task_id="t2",
-            agent_role="backend",
-            original_output="",
-            analysis="",
-            improvements=[],
-            confidence_score=0.5,
-        )
+        result = reflection.to_dict()
         
-        assert high.is_high_confidence(threshold=0.8) is True
-        assert low.is_high_confidence(threshold=0.8) is False
+        assert result["task_id"] == "task-1"
+        assert result["trigger"] == "api_error"
+        assert "root_cause" in result
+    
+    def test_from_dict(self) -> None:
+        """Test creation from dictionary."""
+        data = {
+            "reflection_id": "ref-1",
+            "task_id": "task-1",
+            "agent_id": "agent-1",
+            "attempt_number": 2,
+            "trigger": "test_failure",
+            "timestamp": datetime.now().isoformat(),
+            "root_cause": {"technical": "Bug", "reasoning": "Logic error"},
+            "incorrect_assumptions": [],
+            "improved_strategy": {
+                "approach": "Fix it",
+                "implementation_steps": ["Step 1"],
+                "validation_plan": "Test it",
+            },
+            "lessons_learned": [],
+        }
+        
+        reflection = Reflection.from_dict(data)
+        
+        assert reflection.task_id == "task-1"
+        assert reflection.attempt_number == 2
 
 
-class TestReflexionPattern:
-    """Tests for ReflexionPattern."""
+class TestReflexionTrigger:
+    """Tests for ReflexionTrigger enum."""
+    
+    def test_trigger_values(self) -> None:
+        """Test trigger enum values."""
+        assert ReflexionTrigger.TEST_FAILURE.value == "test_failure"
+        assert ReflexionTrigger.SECURITY_VULNERABILITY.value == "security_vulnerability"
+        assert ReflexionTrigger.API_ERROR.value == "api_error"
+
+
+class TestTaskContext:
+    """Tests for TaskContext dataclass."""
     
     def test_initialization(self) -> None:
-        """Test pattern initialization."""
-        pattern = ReflexionPattern(
-            name="null_check",
-            description="Missing null/undefined checks",
-            detection_keywords=["null", "undefined", "NoneType"],
-            suggested_fix="Add null checks before accessing properties",
-            severity="high",
+        """Test task context initialization."""
+        context = TaskContext(
+            task_id="task-1",
+            description="Implement feature X",
+            requirements=["Req 1", "Req 2"],
+            acceptance_criteria=["AC 1", "AC 2"],
         )
         
-        assert pattern.name == "null_check"
-        assert pattern.severity == "high"
-        assert "null" in pattern.detection_keywords
-    
-    def test_matches_content(self) -> None:
-        """Test pattern matching against content."""
-        pattern = ReflexionPattern(
-            name="sql_injection",
-            description="Potential SQL injection",
-            detection_keywords=["f-string", "format(", "% s"],
-            suggested_fix="Use parameterized queries",
-            severity="critical",
-        )
-        
-        vulnerable_code = "query = f\"SELECT * FROM users WHERE id = {user_id}\""
-        safe_code = "query = 'SELECT * FROM users WHERE id = ?'"
-        
-        assert pattern.matches(vulnerable_code) is True
-        assert pattern.matches(safe_code) is False
+        assert context.task_id == "task-1"
+        assert len(context.requirements) == 2
+        assert len(context.acceptance_criteria) == 2
 
 
-class TestPatternLibrary:
-    """Tests for PatternLibrary."""
+class TestRetryContext:
+    """Tests for RetryContext dataclass."""
     
-    def test_add_pattern(self) -> None:
-        """Test adding patterns to library."""
-        library = PatternLibrary()
+    def test_to_prompt_context(self) -> None:
+        """Test formatting for LLM prompt."""
+        task = TaskContext(task_id="t1", description="Test task")
         
-        pattern = ReflexionPattern(
-            name="error_handling",
-            description="Missing error handling",
-            detection_keywords=["try:", "except", "catch"],
-            suggested_fix="Add try-except blocks",
-            severity="medium",
+        context = RetryContext(
+            original_task=task,
+            previous_attempts_summary="Attempt 1 failed",
+            reflections=[],
+            relevant_patterns=[],
+            similar_successful_tasks=[],
         )
         
-        library.add_pattern(pattern)
+        result = context.to_prompt_context()
         
-        assert library.get_pattern("error_handling") is not None
-    
-    def test_find_matches(self) -> None:
-        """Test finding matching patterns."""
-        library = PatternLibrary()
-        
-        library.add_pattern(ReflexionPattern(
-            name="hardcoded_secret",
-            description="Hardcoded secrets",
-            detection_keywords=["password =", "api_key =", "secret ="],
-            suggested_fix="Use environment variables",
-            severity="critical",
-        ))
-        
-        code = 'password = "mysecretpassword"'
-        matches = library.find_matches(code)
-        
-        assert len(matches) >= 1
-        assert any(m.name == "hardcoded_secret" for m in matches)
-    
-    def test_get_by_severity(self) -> None:
-        """Test filtering patterns by severity."""
-        library = PatternLibrary()
-        
-        library.add_pattern(ReflexionPattern(
-            name="p1", description="", detection_keywords=[], 
-            suggested_fix="", severity="critical"
-        ))
-        library.add_pattern(ReflexionPattern(
-            name="p2", description="", detection_keywords=[], 
-            suggested_fix="", severity="low"
-        ))
-        
-        critical = library.get_by_severity("critical")
-        
-        assert len(critical) == 1
-        assert critical[0].name == "p1"
+        assert "Test task" in result
+        assert "Attempt 1 failed" in result
 
 
 class TestReflexionEngine:
     """Tests for ReflexionEngine."""
     
-    @patch("aurora_dev.core.reflexion.Anthropic")
-    def test_initialization(self, mock_anthropic: Mock) -> None:
+    def test_initialization(self) -> None:
         """Test engine initialization."""
-        engine = ReflexionEngine()
+        engine = ReflexionEngine(project_id="test-project")
         
-        assert engine is not None
-        assert engine._pattern_library is not None
+        assert engine.project_id == "test-project"
+        assert engine.max_attempts == 5
     
-    @patch("aurora_dev.core.reflexion.Anthropic")
-    def test_should_reflect_on_error(self, mock_anthropic: Mock) -> None:
-        """Test that errors trigger reflection."""
+    def test_should_continue_retrying_under_max(self) -> None:
+        """Test retry decision under max attempts."""
+        engine = ReflexionEngine(max_attempts=5)
+        
+        assert engine.should_continue_retrying(1, []) is True
+        assert engine.should_continue_retrying(4, []) is True
+    
+    def test_should_not_continue_retrying_at_max(self) -> None:
+        """Test retry decision at max attempts."""
+        engine = ReflexionEngine(max_attempts=5)
+        
+        assert engine.should_continue_retrying(5, []) is False
+        assert engine.should_continue_retrying(6, []) is False
+    
+    def test_get_retry_context(self) -> None:
+        """Test building retry context."""
+        engine = ReflexionEngine()
+        task = TaskContext(task_id="t1", description="Test")
+        
+        context = engine.get_retry_context(task, [])
+        
+        assert context.original_task == task
+        assert isinstance(context, RetryContext)
+    
+    def test_pattern_library_management(self) -> None:
+        """Test adding and retrieving patterns."""
         engine = ReflexionEngine()
         
-        result = {
-            "success": False,
-            "error": "TypeError: Cannot read property",
-            "output": None,
+        pattern = {
+            "name": "test_pattern",
+            "description": "A test pattern",
+            "applicability": "testing scenarios",
         }
         
-        assert engine.should_reflect(result) is True
-    
-    @patch("aurora_dev.core.reflexion.Anthropic")
-    def test_should_not_reflect_on_success(self, mock_anthropic: Mock) -> None:
-        """Test that success doesn't always trigger reflection."""
-        engine = ReflexionEngine()
+        engine.add_pattern(pattern)
+        patterns = engine.get_pattern_library()
         
-        result = {
-            "success": True,
-            "error": None,
-            "output": "Valid output",
-            "quality_score": 0.95,
-        }
-        
-        # High quality success shouldn't need reflection
-        assert engine.should_reflect(result, quality_threshold=0.9) is False
+        assert len(patterns) >= 1
+        assert any(p["name"] == "test_pattern" for p in patterns)
     
-    @patch("aurora_dev.core.reflexion.Anthropic")
-    def test_extract_context(self, mock_anthropic: Mock) -> None:
-        """Test context extraction for retry."""
+    @pytest.mark.asyncio
+    async def test_store_reflection(self) -> None:
+        """Test storing a reflection."""
         engine = ReflexionEngine()
         
         reflection = Reflection(
+            reflection_id="ref-1",
             task_id="task-1",
-            agent_role="backend",
-            original_output="buggy code",
-            analysis="Missing error handling",
-            improvements=["Add try-except", "Validate input"],
-            confidence_score=0.9,
+            agent_id="agent-1",
+            attempt_number=1,
+            trigger=ReflexionTrigger.TEST_FAILURE,
+            timestamp=datetime.now(),
+            root_cause=RootCause(technical="Error", reasoning="Reason"),
+            incorrect_assumptions=[],
+            improved_strategy=ImprovedStrategy(
+                approach="Fix", implementation_steps=[], validation_plan=""
+            ),
+            lessons_learned=[],
+            task_description="",
+            approach_taken="",
+            code_produced=None,
+            test_results=None,
+            errors=None,
+            performance_metrics=None,
         )
         
-        context = engine.extract_retry_context(reflection)
+        await engine.store_reflection(reflection)
         
-        assert "improvements" in context
-        assert len(context["improvements"]) == 2
-        assert context["previous_analysis"] == "Missing error handling"
-    
-    @patch("aurora_dev.core.reflexion.Anthropic")
-    def test_pattern_detection(self, mock_anthropic: Mock) -> None:
-        """Test automatic pattern detection in output."""
-        engine = ReflexionEngine()
-        
-        # Add a test pattern
-        engine._pattern_library.add_pattern(ReflexionPattern(
-            name="print_debug",
-            description="Debug print statements",
-            detection_keywords=["print(", "console.log"],
-            suggested_fix="Use proper logging",
-            severity="low",
-        ))
-        
-        output = """
-def process():
-    print("Debug: processing started")
-    return result
-"""
-        
-        patterns = engine.detect_patterns(output)
-        
-        assert len(patterns) >= 1
+        reflections = await engine.get_reflections("task-1")
+        assert len(reflections) == 1
+        assert reflections[0].reflection_id == "ref-1"

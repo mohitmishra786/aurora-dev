@@ -6,6 +6,33 @@ from unittest.mock import MagicMock, patch
 from typing import Generator
 
 
+@pytest.fixture
+def mock_settings():
+    """Mock settings for testing infrastructure components."""
+    with patch("aurora_dev.core.config.get_settings") as mock:
+        settings = MagicMock()
+        # Redis settings
+        settings.redis.host = "localhost"
+        settings.redis.port = 6379
+        settings.redis.db = 0
+        settings.redis.password = None
+        settings.redis.url = "redis://localhost:6379/0"
+        # Database settings
+        settings.database.host = "localhost"
+        settings.database.port = 5432
+        settings.database.name = "aurora_test"
+        settings.database.user = "test"
+        settings.database.password = "test"
+        settings.database.url = "postgresql://test:test@localhost:5432/aurora_test"
+        # Logging settings
+        settings.logging.level = "INFO"
+        settings.logging.format = "json"
+        # Agent settings
+        settings.agent.default_model = "claude-3-5-haiku-20241022"
+        settings.agent.max_retries = 3
+        mock.return_value = settings
+        yield settings
+
 @pytest.fixture(scope="session")
 def mock_anthropic_client() -> Generator:
     """

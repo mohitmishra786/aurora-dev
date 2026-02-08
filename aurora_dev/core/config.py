@@ -102,6 +102,48 @@ class LoggingSettings(BaseSettings):
         return normalized
 
 
+class PineconeSettings(BaseSettings):
+    """Pinecone Vector DB configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="PINECONE_")
+
+    api_key: str = Field(
+        default="",
+        description="Pinecone API key",
+    )
+    index_name: str = Field(
+        default="aurora-memory",
+        description="Pinecone index name",
+    )
+    cloud: str = Field(
+        default="aws",
+        description="Cloud provider (aws, gcp, azure)",
+    )
+    region: str = Field(
+        default="us-east-1",
+        description="Cloud region",
+    )
+    dimension: int = Field(
+        default=1536,
+        description="Embedding dimension",
+    )
+
+
+class Mem0Settings(BaseSettings):
+    """Mem0 memory service configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="MEM0_")
+
+    openai_api_key: str = Field(
+        default="",
+        description="OpenAI API key for embeddings",
+    )
+    enabled: bool = Field(
+        default=True,
+        description="Enable Mem0 integration",
+    )
+
+
 class AgentSettings(BaseSettings):
     """Agent-specific configuration."""
 
@@ -147,6 +189,8 @@ class Settings(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    pinecone: PineconeSettings = Field(default_factory=PineconeSettings)
+    mem0: Mem0Settings = Field(default_factory=Mem0Settings)
 
     @property
     def is_development(self) -> bool:

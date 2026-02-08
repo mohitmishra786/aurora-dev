@@ -1,167 +1,107 @@
 """
 Unit tests for Orchestrator components.
 
-Tests OrchestrationEngine, TaskScheduler, and AgentLifecycleManager.
+Tests TaskScheduler and ScheduledTask.
 """
 import pytest
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
-from datetime import datetime, UTC
+from datetime import datetime, timezone
+from unittest.mock import Mock, patch
 
 from aurora_dev.core.orchestrator.scheduler import (
-    TaskNode,
-    DependencyGraph,
+    ScheduledTask,
     TaskScheduler,
+    DependencyStatus,
+    ExecutionGroup,
 )
 
 
-class TestTaskNode:
-    """Tests for TaskNode dataclass."""
+class TestScheduledTask:
+    """Tests for ScheduledTask dataclass."""
     
     def test_initialization(self) -> None:
-        """Test node initialization."""
-        node = TaskNode(
+        """Test task initialization."""
+        task = ScheduledTask(
             task_id="task-1",
-            agent_type="backend",
             operation="implement",
             parameters={"feature": "auth"},
+            dependencies=[],
+            priority=5,
         )
         
-        assert node.task_id == "task-1"
-        assert node.agent_type == "backend"
-        assert node.operation == "implement"
-        assert node.dependencies == []
+        assert task.task_id == "task-1"
+        assert task.operation == "implement"
+        assert task.parameters == {"feature": "auth"}
+        assert task.priority == 5
     
-    def test_is_ready_no_dependencies(self) -> None:
-        """Test node is ready with no dependencies."""
-        node = TaskNode(
+    def test_has_dependencies_false(self) -> None:
+        """Test task with no dependencies."""
+        task = ScheduledTask(
             task_id="task-1",
-            agent_type="backend",
             operation="implement",
+            dependencies=[],
         )
         
-        completed = set()
-        assert node.is_ready(completed) is True
+        assert task.has_dependencies is False
     
-    def test_is_ready_with_completed_dependencies(self) -> None:
-        """Test node is ready when dependencies completed."""
-        node = TaskNode(
+    def test_has_dependencies_true(self) -> None:
+        """Test task with dependencies."""
+        task = ScheduledTask(
             task_id="task-2",
-            agent_type="backend",
             operation="implement",
             dependencies=["task-1"],
         )
         
-        completed = {"task-1"}
-        assert node.is_ready(completed) is True
+        assert task.has_dependencies is True
     
-    def test_is_ready_with_pending_dependencies(self) -> None:
-        """Test node not ready when dependencies pending."""
-        node = TaskNode(
-            task_id="task-2",
-            agent_type="backend",
-            operation="implement",
-            dependencies=["task-1"],
-        )
-        
-        completed = set()
-        assert node.is_ready(completed) is False
-
-
-class TestDependencyGraph:
-    """Tests for DependencyGraph."""
-    
-    def test_add_node(self) -> None:
-        """Test adding nodes to graph."""
-        graph = DependencyGraph()
-        
-        node = TaskNode(
+    def test_to_dict(self) -> None:
+        """Test conversion to dictionary."""
+        task = ScheduledTask(
             task_id="task-1",
-            agent_type="backend",
-            operation="implement",
+            operation="test",
+            parameters={"key": "value"},
         )
         
-        graph.add_node(node)
+        result = task.to_dict()
         
-        assert "task-1" in graph.nodes
+        assert result["task_id"] == "task-1"
+        assert result["operation"] == "test"
+        assert "parameters" in result
+
+
+class TestExecutionGroup:
+    """Tests for ExecutionGroup."""
     
-    def test_add_edge(self) -> None:
-        """Test adding edges between nodes."""
-        graph = DependencyGraph()
+    def test_initialization(self) -> None:
+        """Test group initialization."""
+        group = ExecutionGroup(
+            group_id="group-1",
+            max_concurrent=4,
+        )
         
-        node1 = TaskNode(task_id="task-1", agent_type="backend", operation="design")
-        node2 = TaskNode(task_id="task-2", agent_type="backend", operation="implement")
-        
-        graph.add_node(node1)
-        graph.add_node(node2)
-        graph.add_edge("task-1", "task-2")
-        
-        assert "task-2" in graph.edges["task-1"]
+        assert group.group_id == "group-1"
+        assert group.max_concurrent == 4
+        assert len(group.tasks) == 0
     
-    def test_get_roots(self) -> None:
-        """Test finding root nodes (no dependencies)."""
-        graph = DependencyGraph()
+    def test_add_task(self) -> None:
+        """Test adding task to group."""
+        group = ExecutionGroup(group_id="group-1")
+        task = ScheduledTask(task_id="task-1", operation="test")
         
-        node1 = TaskNode(task_id="root", agent_type="architect", operation="design")
-        node2 = TaskNode(task_id="child", agent_type="backend", operation="implement", dependencies=["root"])
+        group.add_task(task)
         
-        graph.add_node(node1)
-        graph.add_node(node2)
-        graph.add_edge("root", "child")
-        
-        roots = graph.get_roots()
-        
-        assert len(roots) == 1
-        assert roots[0].task_id == "root"
+        assert len(group.tasks) == 1
+        assert "task-1" in group.task_ids
     
-    def test_topological_sort(self) -> None:
-        """Test topological sorting of nodes."""
-        graph = DependencyGraph()
+    def test_task_ids(self) -> None:
+        """Test getting task IDs from group."""
+        group = ExecutionGroup(group_id="group-1")
+        group.add_task(ScheduledTask(task_id="t1", operation="op1"))
+        group.add_task(ScheduledTask(task_id="t2", operation="op2"))
         
-        # Create a simple dependency chain: A -> B -> C
-        node_a = TaskNode(task_id="A", agent_type="architect", operation="design")
-        node_b = TaskNode(task_id="B", agent_type="backend", operation="implement", dependencies=["A"])
-        node_c = TaskNode(task_id="C", agent_type="tester", operation="test", dependencies=["B"])
+        ids = group.task_ids
         
-        graph.add_node(node_a)
-        graph.add_node(node_b)
-        graph.add_node(node_c)
-        graph.add_edge("A", "B")
-        graph.add_edge("B", "C")
-        
-        sorted_nodes = graph.topological_sort()
-        sorted_ids = [n.task_id for n in sorted_nodes]
-        
-        # A must come before B, B must come before C
-        assert sorted_ids.index("A") < sorted_ids.index("B")
-        assert sorted_ids.index("B") < sorted_ids.index("C")
-    
-    def test_detect_cycle(self) -> None:
-        """Test cycle detection."""
-        graph = DependencyGraph()
-        
-        # Create a cycle: A -> B -> A
-        node_a = TaskNode(task_id="A", agent_type="backend", operation="op1")
-        node_b = TaskNode(task_id="B", agent_type="backend", operation="op2")
-        
-        graph.add_node(node_a)
-        graph.add_node(node_b)
-        graph.add_edge("A", "B")
-        graph.add_edge("B", "A")
-        
-        assert graph.has_cycle() is True
-    
-    def test_no_cycle(self) -> None:
-        """Test no cycle in valid graph."""
-        graph = DependencyGraph()
-        
-        node_a = TaskNode(task_id="A", agent_type="backend", operation="op1")
-        node_b = TaskNode(task_id="B", agent_type="backend", operation="op2")
-        
-        graph.add_node(node_a)
-        graph.add_node(node_b)
-        graph.add_edge("A", "B")
-        
-        assert graph.has_cycle() is False
+        assert "t1" in ids
+        assert "t2" in ids
 
 
 class TestTaskScheduler:
@@ -172,76 +112,75 @@ class TestTaskScheduler:
         scheduler = TaskScheduler()
         
         assert scheduler is not None
-        assert len(scheduler._graph.nodes) == 0
+        assert len(scheduler.tasks) == 0
     
-    def test_add_task(self) -> None:
-        """Test adding task to scheduler."""
+    def test_schedule_task(self) -> None:
+        """Test scheduling a task."""
         scheduler = TaskScheduler()
         
-        scheduler.add_task(
-            task_id="task-1",
-            agent_type="backend",
+        task_id = scheduler.schedule(
             operation="implement",
             parameters={"feature": "auth"},
+            priority=5,
         )
         
-        assert "task-1" in scheduler._graph.nodes
+        assert task_id is not None
+        assert task_id in scheduler.tasks
     
-    def test_add_task_with_dependencies(self) -> None:
-        """Test adding task with dependencies."""
+    def test_schedule_with_dependencies(self) -> None:
+        """Test scheduling task with dependencies."""
         scheduler = TaskScheduler()
         
-        scheduler.add_task(
-            task_id="task-1",
-            agent_type="architect",
-            operation="design",
-        )
-        
-        scheduler.add_task(
-            task_id="task-2",
-            agent_type="backend",
+        task1_id = scheduler.schedule(operation="design")
+        task2_id = scheduler.schedule(
             operation="implement",
-            dependencies=["task-1"],
+            dependencies=[task1_id],
         )
         
-        # Check dependency is recorded
-        node = scheduler._graph.nodes["task-2"]
-        assert "task-1" in node.dependencies
+        task2 = scheduler.tasks[task2_id]
+        assert task1_id in task2.dependencies
     
-    def test_get_executable_tasks(self) -> None:
+    def test_get_ready_tasks(self) -> None:
         """Test getting tasks ready for execution."""
         scheduler = TaskScheduler()
         
-        scheduler.add_task("task-1", "architect", "design")
-        scheduler.add_task("task-2", "backend", "implement", dependencies=["task-1"])
-        scheduler.add_task("task-3", "frontend", "implement", dependencies=["task-1"])
+        task1_id = scheduler.schedule(operation="design")
+        task2_id = scheduler.schedule(operation="implement", dependencies=[task1_id])
         
-        # Initially only task-1 is ready
-        ready = scheduler.get_executable_tasks()
-        assert len(ready) == 1
-        assert ready[0].task_id == "task-1"
+        # Only task1 should be ready
+        ready = list(scheduler.get_ready_tasks())
+        ready_ids = [t.task_id for t in ready]
         
-        # After completing task-1, tasks 2 and 3 should be ready
-        scheduler.mark_completed("task-1")
-        ready = scheduler.get_executable_tasks()
-        
-        assert len(ready) == 2
-        task_ids = {t.task_id for t in ready}
-        assert "task-2" in task_ids
-        assert "task-3" in task_ids
+        assert task1_id in ready_ids
+        assert task2_id not in ready_ids
     
-    def test_parallel_groups(self) -> None:
-        """Test identifying parallel execution groups."""
+    def test_mark_completed(self) -> None:
+        """Test marking task as completed."""
         scheduler = TaskScheduler()
         
-        # Two independent tasks that can run in parallel
-        scheduler.add_task("task-a", "backend", "implement")
-        scheduler.add_task("task-b", "frontend", "implement")
+        task1_id = scheduler.schedule(operation="design")
+        task2_id = scheduler.schedule(operation="implement", dependencies=[task1_id])
         
-        groups = scheduler.get_parallel_groups()
+        scheduler.mark_completed(task1_id)
         
-        # Both tasks should be in the same parallel group
-        assert len(groups) >= 1
-        first_group_ids = {t.task_id for t in groups[0]}
-        assert "task-a" in first_group_ids
-        assert "task-b" in first_group_ids
+        # Now task2 should be ready
+        ready = list(scheduler.get_ready_tasks())
+        ready_ids = [t.task_id for t in ready]
+        
+        assert task2_id in ready_ids
+    
+    def test_schedule_batch(self) -> None:
+        """Test batch scheduling."""
+        scheduler = TaskScheduler()
+        
+        tasks = [
+            {"operation": "design"},
+            {"operation": "implement"},
+            {"operation": "test"},
+        ]
+        
+        task_ids = scheduler.schedule_batch(tasks)
+        
+        assert len(task_ids) == 3
+        for tid in task_ids:
+            assert tid in scheduler.tasks

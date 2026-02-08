@@ -581,9 +581,6 @@ class DependencyCheckScanner(BaseTool):
                 error=f"Scan timed out after {self.timeout_seconds}s",
                 duration_ms=duration_ms,
             )
-        except Exception as e:
-            duration_ms = (time.time() - start_time) * 1000
-            self._logger.error(f"Dependency-Check failed: {e}")
             return ToolResult(
                 tool_name=self.name,
                 status=ToolStatus.FAILED,
@@ -591,3 +588,289 @@ class DependencyCheckScanner(BaseTool):
                 error=str(e),
                 duration_ms=duration_ms,
             )
+
+
+class BanditScanner(BaseTool):
+    """
+    Bandit Python security linter.
+    
+    Scans Python code for common security issues like:
+    - Hardcoded passwords
+    - SQL injection
+    - Shell injection
+    - Insecure crypto usage
+    - Weak hashing algorithms
+    
+    Config:
+        path: Directory or file to scan
+        severity: Minimum severity (low, medium, high)
+        confidence: Minimum confidence (low, medium, high)
+        exclude: Patterns to exclude (optional)
+    """
+    
+    @property
+    def name(self) -> str:
+        return "bandit"
+    
+    @property
+    def description(self) -> str:
+        return "Python security linter with Bandit"
+    
+    @property
+    def timeout_seconds(self) -> int:
+        return 180  # 3 minutes
+    
+    def validate_config(self, config: dict[str, Any]) -> tuple[bool, Optional[str]]:
+        """Validate Bandit configuration."""
+        if not shutil.which("bandit"):
+            return False, "bandit not found in PATH. Install with: pip install bandit"
+        
+        if "path" not in config:
+            return False, "Missing required 'path' field"
+        
+        path = config["path"]
+        if not os.path.exists(path):
+            return False, f"Path does not exist: {path}"
+        
+        return True, None
+    
+    async def run(self, config: dict[str, Any]) -> ToolResult:
+        """Run Bandit security scan."""
+        path = config["path"]
+        severity = config.get("severity", "low")
+        confidence = config.get("confidence", "low")
+        exclude = config.get("exclude", [])
+        
+        start_time = time.time()
+        
+        # Build command
+        cmd_parts = [
+            "bandit",
+            "--format", "json",
+            "--recursive",
+            "--severity-level", severity[0].upper(),  # l, m, h
+            "--confidence-level", confidence[0].upper(),
+        ]
+        
+        for pattern in exclude:
+            cmd_parts.extend(["--exclude", pattern])
+        
+        cmd_parts.append(path)
+        
+        command = " ".join(cmd_parts)
+        
+        self._logger.info(f"Running Bandit on: {path}")
+        
+        try:
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=self.timeout_seconds,
+            )
+            
+            duration_ms = (time.time() - start_time) * 1000
+            
+            stdout_str = stdout.decode("utf-8", errors="replace")
+            
+            # Parse JSON output
+            try:
+                results = json.loads(stdout_str) if stdout_str.strip() else {}
+            except json.JSONDecodeError:
+                results = {"error": "Failed to parse output", "raw": stdout_str}
+            
+            # Extract results
+            issues = results.get("results", [])
+            metrics = results.get("metrics", {})
+            
+            # Categorize by severity
+            severity_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+            for issue in issues:
+                sev = issue.get("issue_severity", "LOW")
+                severity_counts[sev] = severity_counts.get(sev, 0) + 1
+            
+            # High severity = failure
+            has_high = severity_counts.get("HIGH", 0) > 0
+            
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.FAILED if has_high else ToolStatus.SUCCESS,
+                output={
+                    "issues": issues,
+                    "metrics": metrics,
+                    "summary": {
+                        "total_issues": len(issues),
+                        "by_severity": severity_counts,
+                    },
+                },
+                error=f"{severity_counts['HIGH']} high severity issues found" if has_high else None,
+                exit_code=process.returncode,
+                duration_ms=duration_ms,
+                metrics={
+                    "issues": len(issues),
+                    "high": severity_counts.get("HIGH", 0),
+                    "medium": severity_counts.get("MEDIUM", 0),
+                    "low": severity_counts.get("LOW", 0),
+                },
+            )
+            
+        except asyncio.TimeoutError:
+            duration_ms = (time.time() - start_time) * 1000
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.TIMEOUT,
+                output=None,
+                error=f"Scan timed out after {self.timeout_seconds}s",
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self._logger.error(f"Bandit scan failed: {e}")
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.FAILED,
+                output=None,
+                error=str(e),
+                duration_ms=duration_ms,
+            )
+
+
+class SafetyScanner(BaseTool):
+    """
+    Safety pip vulnerability scanner.
+    
+    Checks Python dependencies against the Safety vulnerability database
+    to find packages with known security issues.
+    
+    Config:
+        requirements_file: Path to requirements.txt file
+        stdin: Pass requirements via stdin (optional)
+        ignore_ids: List of vulnerability IDs to ignore (optional)
+    """
+    
+    @property
+    def name(self) -> str:
+        return "safety"
+    
+    @property
+    def description(self) -> str:
+        return "Python dependency vulnerability scanner with Safety"
+    
+    @property
+    def timeout_seconds(self) -> int:
+        return 120  # 2 minutes
+    
+    def validate_config(self, config: dict[str, Any]) -> tuple[bool, Optional[str]]:
+        """Validate Safety configuration."""
+        if not shutil.which("safety"):
+            return False, "safety not found in PATH. Install with: pip install safety"
+        
+        if "requirements_file" not in config and "stdin" not in config:
+            return False, "Missing 'requirements_file' or 'stdin' field"
+        
+        if "requirements_file" in config:
+            req_file = config["requirements_file"]
+            if not os.path.exists(req_file):
+                return False, f"Requirements file does not exist: {req_file}"
+        
+        return True, None
+    
+    async def run(self, config: dict[str, Any]) -> ToolResult:
+        """Run Safety vulnerability check."""
+        requirements_file = config.get("requirements_file")
+        stdin_data = config.get("stdin")
+        ignore_ids = config.get("ignore_ids", [])
+        
+        start_time = time.time()
+        
+        # Build command
+        cmd_parts = ["safety", "check", "--json"]
+        
+        if requirements_file:
+            cmd_parts.extend(["--file", requirements_file])
+        
+        for vuln_id in ignore_ids:
+            cmd_parts.extend(["--ignore", str(vuln_id)])
+        
+        command = " ".join(cmd_parts)
+        
+        self._logger.info(f"Running Safety check")
+        
+        try:
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdin=asyncio.subprocess.PIPE if stdin_data else None,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            
+            stdin_bytes = stdin_data.encode() if stdin_data else None
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(input=stdin_bytes),
+                timeout=self.timeout_seconds,
+            )
+            
+            duration_ms = (time.time() - start_time) * 1000
+            
+            stdout_str = stdout.decode("utf-8", errors="replace")
+            
+            # Parse JSON output
+            try:
+                results = json.loads(stdout_str) if stdout_str.strip() else {}
+            except json.JSONDecodeError:
+                # Safety may output plain text on errors
+                results = {"error": stdout_str or stderr.decode()}
+            
+            # Safety 2.x format
+            vulnerabilities = []
+            if isinstance(results, list):
+                # Old format: list of vulnerabilities
+                vulnerabilities = results
+            elif isinstance(results, dict):
+                # New format: dict with vulnerabilities key
+                vulnerabilities = results.get("vulnerabilities", [])
+            
+            # Count by severity (Safety doesn't have severity, so count all as high)
+            has_vulnerabilities = len(vulnerabilities) > 0
+            
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.FAILED if has_vulnerabilities else ToolStatus.SUCCESS,
+                output={
+                    "vulnerabilities": vulnerabilities,
+                    "summary": {
+                        "total_vulnerabilities": len(vulnerabilities),
+                    },
+                },
+                error=f"{len(vulnerabilities)} vulnerable packages found" if has_vulnerabilities else None,
+                exit_code=process.returncode,
+                duration_ms=duration_ms,
+                metrics={
+                    "vulnerabilities": len(vulnerabilities),
+                },
+            )
+            
+        except asyncio.TimeoutError:
+            duration_ms = (time.time() - start_time) * 1000
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.TIMEOUT,
+                output=None,
+                error=f"Scan timed out after {self.timeout_seconds}s",
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self._logger.error(f"Safety check failed: {e}")
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.FAILED,
+                output=None,
+                error=str(e),
+                duration_ms=duration_ms,
+            )
+
