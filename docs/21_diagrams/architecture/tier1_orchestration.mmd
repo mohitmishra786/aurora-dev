@@ -1,0 +1,41 @@
+graph TB
+    %% Tier 2: Orchestration Layer
+    %% Focuses on the Maestro Agent and Memory Coordinator
+
+    subgraph "Orchestration Layer"
+        MAESTRO[Maestro Agent\n(The Conductor)]
+        MEM_COORD[Memory Coordinator\n(The Librarian)]
+    end
+
+    subgraph "Inputs"
+        USER_REQ[User Requirement]
+        SYS_EVENT[System Event]
+    end
+
+    subgraph "Outputs"
+        TASK_ASSIGN[Task Assignment]
+        MEM_UPDATE[Memory Update]
+    end
+
+    USER_REQ --> MAESTRO
+    SYS_EVENT --> MAESTRO
+
+    %% Maestro Internal Logic
+    MAESTRO -->|Decompose| PLAN[Plan Strategy]
+    PLAN -->|Schedule| DELEGATE[Delegate to Agents]
+
+    %% Memory Interaction
+    MAESTRO <-->|Context Retrieval| MEM_COORD
+    MEM_COORD -->|Fetch| REDIS[(Short-term)]
+    MEM_COORD -->|Fetch| PG[(Working)]
+    MEM_COORD -->|Fetch| MEM0[(Long-term)]
+
+    %% Coordination
+    MAESTRO -->|Monitor| AGENT_STATUS[Agent Status Monitor]
+    AGENT_STATUS -->|Alert| MAESTRO
+    
+    DELEGATE --> TASK_ASSIGN
+    MEM_COORD --> MEM_UPDATE
+
+    classDef core fill:#eab308,stroke:#a16207,color:white;
+    class MAESTRO,MEM_COORD core;

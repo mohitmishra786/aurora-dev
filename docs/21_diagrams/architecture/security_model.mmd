@@ -1,0 +1,30 @@
+graph TB
+    %% Security Model
+    %% Defense in depth layers
+
+    subgraph "Layer 1: Network"
+        WAF[Web App Firewall]
+        VPC[Private VPC]
+        SG[Security Groups]
+    end
+    
+    subgraph "Layer 2: Application"
+        AUTH[JWT Auth]
+        RBAC[Role-Based Access]
+        RATE[Rate Limiting]
+    end
+    
+    subgraph "Layer 3: Data"
+        ENC_REST[Encryption at Rest]
+        ENC_TRANS[TLS 1.3]
+        MASK[Data Masking]
+    end
+    
+    TRAFFIC((Internet)) --> WAF
+    WAF --> VPC
+    VPC --> AUTH
+    AUTH --> RBAC
+    RBAC --> ENC_REST
+
+    classDef security fill:#ef4444,stroke:#991b1b,color:white;
+    class WAF,AUTH,ENC_REST security;

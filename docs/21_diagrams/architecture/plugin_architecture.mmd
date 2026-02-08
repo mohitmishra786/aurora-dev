@@ -1,0 +1,26 @@
+graph TB
+    %% Plugin Architecture
+    %% How plugins extend the core
+    
+    CORE[Aurora Core]
+    HOOKS[Hook System]
+    
+    subgraph "Plugins"
+        P1[Custom Agent]
+        P2[New Integration]
+        P3[Custom Memory]
+    end
+    
+    CORE -->|Trigger| HOOKS
+    HOOKS -->|Call| P1
+    HOOKS -->|Call| P2
+    HOOKS -->|Call| P3
+    
+    P1 -->|Return| HOOKS
+    P2 -->|Return| HOOKS
+    P3 -->|Return| HOOKS
+    
+    HOOKS -->|Result| CORE
+
+    classDef plugin fill:#8b5cf6,stroke:#5b21b6,color:white;
+    class P1,P2,P3 plugin;

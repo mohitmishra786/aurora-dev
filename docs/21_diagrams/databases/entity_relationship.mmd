@@ -1,0 +1,71 @@
+erDiagram
+    %% Core Entity Relationship Diagram for AURORA-DEV
+    
+    ORGANIZATION ||--o{ PROJECT : owns
+    PROJECT ||--o{ TASK : contains
+    PROJECT ||--o{ AGENT_STATE : tracks
+    PROJECT ||--o{ ARTIFACT : stores
+    PROJECT ||--o{ MEMORY_ITEM : has
+
+    TASK ||--o{ SUBTASK : decomposes_to
+    TASK }|--|| AGENT_STATE : assigned_to
+    TASK ||--o{ DEPENDENCY : has_prerequisite
+    TASK ||--o{ REFLEXION : triggers
+
+    AGENT_STATE ||--o{ ACTION_LOG : performs
+    AGENT_STATE ||--o{ MEMORY_ITEM : creates
+
+    USER ||--o{ ORGANIZATION : belongs_to
+    USER ||--o{ AUDIT_LOG : triggers
+
+    %% Key Entities
+
+    PROJECT {
+        uuid id PK
+        string name
+        string status
+        jsonb config
+        timestamp created_at
+    }
+
+    TASK {
+        uuid id PK
+        uuid project_id FK
+        string title
+        string description
+        string status
+        string priority
+        jsonb agent_config
+    }
+
+    AGENT_STATE {
+        uuid id PK
+        uuid project_id FK
+        string role
+        string status
+        int current_load
+        jsonb capability_snapshot
+    }
+
+    MEMORY_ITEM {
+        uuid id PK
+        uuid project_id FK
+        vector embedding
+        text content
+        jsonb metadata
+        float importance
+    }
+
+    AUDIT_LOG {
+        uuid id PK
+        timestamp created_at
+        string actor_type
+        uuid actor_id
+        string action
+        jsonb changes
+    }
+
+    DEPENDENCY {
+        uuid tasks_id FK
+        uuid depends_on_task_id FK
+    }

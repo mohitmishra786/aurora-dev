@@ -1,0 +1,41 @@
+graph TB
+    %% Tier 6: DevOps & Operations
+    %% DevOps, Documentation, Monitoring Agents
+
+    subgraph "DevOps Layer"
+        OPS[DevOps Agent]
+        DOCS[Documentation Agent]
+        MON[Monitoring Agent]
+    end
+
+    subgraph "Deployment Targets"
+        K8S[Kubernetes Cluster]
+        DOCKER[Docker Registry]
+        CDN[CDN / Static Assets]
+    end
+
+    subgraph "Observability"
+        PROM[Prometheus]
+        GRAF[Grafana]
+        ELK[ELK Stack]
+    end
+
+    %% Deployment Flow
+    CODE[Approved Code] --> OPS
+    OPS -->|Build| DOCKER
+    OPS -->|Deploy| K8S
+    OPS -->|Publish| CDN
+
+    %% Documentation Flow
+    CODE --> DOCS
+    DOCS -->|Generate| SITE[Docs Site]
+    DOCS -->|Update| README[README.md]
+
+    %% Monitoring Flow
+    K8S --> MON
+    MON -->|Config Alerts| PROM
+    MON -->|Dashboards| GRAF
+    MON -->|Log Rules| ELK
+
+    classDef devops fill:#f97316,stroke:#c2410c,color:white;
+    class OPS,DOCS,MON devops;

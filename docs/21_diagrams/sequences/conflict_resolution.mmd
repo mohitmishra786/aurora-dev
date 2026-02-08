@@ -1,0 +1,28 @@
+sequenceDiagram
+    %% Conflict Resolution Protocol
+    %% Solving merge conflicts without humans
+
+    participant G as Git
+    participant M as Maestro
+    participant LLM as Claude Opus
+
+    G-->>M: Merge Conflict Detected
+    M->>G: Get Conflicting Files
+    G-->>M: File Content (Base, Ours, Theirs)
+    
+    M->>LLM: Analyze Conflict
+    Note right of M: Prompt with code context
+    
+    LLM-->>M: Proposed Resolution
+    
+    M->>G: Apply Resolution
+    M->>G: Run Broker Tests
+    
+    alt Tests Pass
+        G-->>M: Success
+        M->>G: Commit Merge
+    else Tests Fail
+        M->>LLM: Reflexion (Fix Failed Merge)
+        LLM-->>M: New Resolution
+        M->>G: Retry
+    end

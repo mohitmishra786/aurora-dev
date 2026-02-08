@@ -1,0 +1,28 @@
+flowchart TD
+    %% Memory Retrieval Flow
+    %% How an agent finds relevant context
+
+    AGENT[Agent Needs Context] --> QUERY[Formulate Query]
+    QUERY --> EMBED[Generate Embedding]
+    
+    EMBED --> SEARCH_STM{Check Short-term}
+    SEARCH_STM -->|Found| MERGE[Merge Results]
+    SEARCH_STM -->|Miss| SEARCH_WM{Check Working Memory}
+    
+    SEARCH_WM -->|Vector Search| VEC_RESULTS[Vector Results]
+    SEARCH_WM -->|Metadata Filter| META_RESULTS[Metadata Results]
+    
+    VEC_RESULTS --> RANK[Re-rank Results]
+    META_RESULTS --> RANK
+    
+    RANK --> THRESHOLD{Score > 0.7?}
+    THRESHOLD -->|Yes| ADD_CTX[Add to Context]
+    THRESHOLD -->|No| SEARCH_LTM{Check Long-term}
+    
+    SEARCH_LTM -->|Found Patterns| ADD_CTX
+    
+    ADD_CTX --> PRUNE[Prune to Token Limit]
+    PRUNE --> FINAL[Final Context]
+    
+    classDef search fill:#8b5cf6,stroke:#5b21b6,color:white;
+    class SEARCH_STM,SEARCH_WM,SEARCH_LTM search;

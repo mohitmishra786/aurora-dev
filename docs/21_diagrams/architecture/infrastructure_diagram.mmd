@@ -1,0 +1,36 @@
+graph TB
+    %% Infrastructure Diagram
+    %% C4 Container view of deployment
+
+    subgraph "Kubernetes Cluster"
+        INGRESS[Ingress Controller]
+        
+        subgraph "Services"
+            API[API Pods]
+            WORKER[Worker Pods]
+            WS[WebSocket Pods]
+        end
+        
+        subgraph "Data"
+            REDIS[(Redis Cluster)]
+            PG[(PostgreSQL HA)]
+            MEM0[(Mem0 Vector DB)]
+        end
+    end
+
+    INTERNET((User Traffic)) --> INGRESS
+    INGRESS --> API
+    INGRESS --> WS
+    
+    API --> REDIS
+    API --> PG
+    API --> MEM0
+    
+    WORKER --> REDIS
+    WORKER --> PG
+    WORKER --> MEM0
+    
+    WS --> REDIS
+
+    classDef node fill:#1e293b,stroke:#0f172a,color:white;
+    class API,WORKER,WS node;

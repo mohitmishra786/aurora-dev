@@ -1,0 +1,88 @@
+graph TB
+    %% High-level Architecture of AURORA-DEV
+    %% Shows the 5 tiers and their interaction with infrastructure
+
+    subgraph "Tier 1: User Interface"
+        CLI[CLI Tool]
+        API[REST API]
+        WS[WebSocket Service]
+        Web[Web Dashboard]
+    end
+
+    subgraph "Tier 2: Orchestration"
+        Maestro[Maestro Agent]
+        MemCoord[Memory Coordinator]
+    end
+
+    subgraph "Tier 3: Planning"
+        Arch[Architect Agent]
+        Res[Research Agent]
+        Prod[Product Analyst]
+    end
+
+    subgraph "Tier 4: Implementation"
+        BE[Backend Agent]
+        FE[Frontend Agent]
+        DB[Database Agent]
+        Int[Integration Agent]
+    end
+
+    subgraph "Tier 5: Quality & DevOps"
+        QA[Test Engineer]
+        Sec[Security Auditor]
+        Rev[Code Reviewer]
+        Ops[DevOps Agent]
+    end
+
+    subgraph "Infrastructure Layer"
+        PG[(PostgreSQL\nWorking Memory)]
+        Redis[(Redis\nShort-term Memory)]
+        Mem0[(Mem0\nLong-term Memory)]
+        LLM[Claude 3.5 Sonnet/Opus]
+    end
+
+    %% Data Flow
+    CLI --> API
+    Web --> API
+    API --> Maestro
+    WS --> Maestro
+
+    %% Orchestration Flow
+    Maestro --> MemCoord
+    Maestro --> Arch
+    Maestro --> Res
+    Maestro --> Prod
+
+    %% Memory Access
+    MemCoord <--> PG
+    MemCoord <--> Redis
+    MemCoord <--> Mem0
+
+    %% Planning to Implementation
+    Arch --> BE
+    Arch --> FE
+    Arch --> DB
+    Arch --> Int
+
+    %% Implementation to Quality
+    BE --> QA
+    FE --> QA
+    DB --> QA
+    
+    %% Quality Loop
+    QA --> Sec
+    Sec --> Rev
+    Rev --> Maestro : "Approval/Rejection"
+
+    %% LLM Interaction (All agents interact, simplifying lines)
+    Maestro -.-> LLM
+    Arch -.-> LLM
+    BE -.-> LLM
+    QA -.-> LLM
+
+    classDef primary fill:#2563eb,stroke:#1e40af,color:white;
+    classDef secondary fill:#4b5563,stroke:#374151,color:white;
+    classDef infra fill:#059669,stroke:#047857,color:white;
+    
+    class Maestro,MemCoord primary;
+    class PG,Redis,Mem0,LLM infra;

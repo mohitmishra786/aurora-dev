@@ -1,0 +1,40 @@
+graph TB
+    %% Tier 5: Quality Assurance Layer
+    %% Test Engineer, Security Auditor, Code Reviewer
+
+    subgraph "Quality Layer"
+        TEST[Test Engineer]
+        SEC[Security Auditor]
+        REV[Code Reviewer]
+        VAL[Validator Agent]
+    end
+
+    subgraph "Verification Targets"
+        PR[Pull Request]
+        STAGING[Staging Env]
+    end
+
+    subgraph "Automated Gates"
+        CI[CI Pipeline]
+        SCAN[Security Scanner]
+    end
+
+    %% Flow
+    PR --> REV
+    REV -->|Architecture Check| VAL
+    
+    PR --> TEST
+    TEST -->|Generate Tests| CI
+    
+    PR --> SEC
+    SEC -->|Audit| SCAN
+
+    %% Feedback Loop
+    REV -->|Comments| DEV_AGENT[Implementation Agent]
+    SEC -->|Vulnerabilities| DEV_AGENT
+    TEST -->|Bug Report| DEV_AGENT
+    
+    VAL -->|Approved| MERGE[Merge to Main]
+
+    classDef quality fill:#ec4899,stroke:#be185d,color:white;
+    class TEST,SEC,REV,VAL quality;

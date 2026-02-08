@@ -1,0 +1,35 @@
+flowchart TD
+    %% Deployment Flow
+    %% From code commit to production
+
+    DEV[Developer] -->|Push| GIT[Git Repository]
+    GIT -->|Trigger| CI[CI Pipeline]
+    
+    subgraph "CI Stage"
+        CI --> LINT[Linting]
+        LINT --> UNIT[Unit Tests]
+        UNIT --> BUILD[Build Image]
+        BUILD --> SCAN[Security Scan]
+    end
+    
+    SCAN -->|Pass| REGISTRY[Container Registry]
+    SCAN -->|Fail| NOTIFY[Notify Developer]
+    
+    REGISTRY --> CD[CD Pipeline]
+    
+    subgraph "CD Stage"
+        CD --> HELM[Helm Upgrade]
+        HELM --> K8S[Kubernetes Cluster]
+        
+        K8S --> ROLLOUT[Rolling Update]
+        ROLLOUT --> HEALTH{Health Check}
+    end
+    
+    HEALTH -->|Healthy| DONE[Deployment Complete]
+    HEALTH -->|Unhealthy| ROLLBACK[Auto-Rollback]
+    
+    ROLLBACK --> ALERT[Alert DevOps]
+    DONE --> ALERT
+
+    classDef stage fill:#fca5a5,stroke:#b91c1c,color:black;
+    class CI,CD stage;

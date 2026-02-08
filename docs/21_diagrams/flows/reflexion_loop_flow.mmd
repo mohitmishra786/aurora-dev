@@ -1,0 +1,27 @@
+flowchart TD
+    %% Reflexion Loop Flow
+    %% How agents learn from mistakes
+
+    FAILURE[Action Failed] --> CATCH[Catch Error]
+    CATCH --> LOG[Log to Memory]
+    
+    LOG --> ANALYZE[Analyze Root Cause]
+    ANALYZE --> HYPOTHESIZE[Generate Hypothesis]
+    
+    HYPOTHESIZE --> QUERY_LLM{Ask LLM}
+    QUERY_LLM -->|Suggestion| STRATEGY[New Strategy]
+    
+    STRATEGY --> RETRY[Retry Action]
+    RETRY --> RESULT{Success?}
+    
+    RESULT -->|No| ESCALATE[Escalate?]
+    ESCALATE -->|No - Retry limit| ANALYZE
+    ESCALATE -->|Yes| HUMAN[Notify Human]
+    
+    RESULT -->|Yes| STORE[Store as Reflexion Pattern]
+    STORE --> UPDATE_MEM[Update Long-term Memory]
+    
+    UPDATE_MEM --> CONTINUE[Continue Workflow]
+
+    classDef loop fill:#ef4444,stroke:#b91c1c,color:white;
+    class ANALYZE,HYPOTHESIZE,STRATEGY,RETRY loop;

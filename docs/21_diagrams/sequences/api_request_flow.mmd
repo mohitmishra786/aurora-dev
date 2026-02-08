@@ -1,0 +1,29 @@
+sequenceDiagram
+    %% API Request Flow
+    %% Request lifecycle through the system
+
+    participant Client
+    participant LB as Load Balancer
+    participant API as API Service
+    participant Auth as Auth Middleware
+    participant Rate as Rate Limiter
+    participant DB as Database
+
+    Client->>LB: GET /api/v1/projects
+    LB->>API: Forward Request
+    
+    API->>Rate: Check Limit(IP)
+    alt Limit Exceeded
+        Rate-->>API: 429 Too Many Requests
+        API-->>Client: 429 Error
+    else Allowed
+        API->>Auth: Verify JWT
+        alt Invalid Token
+            Auth-->>API: 401 Unauthorized
+            API-->>Client: 401 Error
+        else Valid
+            API->>DB: Query Projects
+            DB-->>API: Results
+            API-->>Client: 200 JSON Response
+        end
+    end

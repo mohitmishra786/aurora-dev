@@ -1,0 +1,25 @@
+flowchart TD
+    %% Project Creation Flow
+    %% CLI to initialized project
+
+    User -->|aurora init| CLI
+    CLI -->|Request Specs| User
+    User -->|Inputs| CLI
+    
+    CLI -->|POST /projects| API
+    API -->|Create| DB[(Database)]
+    
+    API -->|Trigger| Maestro
+    Maestro -->|Assign| Architect
+    
+    Architect -->|Scaffold| FileSystem
+    Architect -->|Config| Git[Git Repo]
+    
+    Maestro -->|Analyze| Research
+    Research -->|Tech Stack| DB
+    
+    Maestro -->|Ready| CLI
+    CLI -->|Done| User
+
+    classDef user fill:#6366f1,stroke:#4338ca,color:white;
+    class User user;

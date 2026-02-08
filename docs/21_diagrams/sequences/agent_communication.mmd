@@ -1,0 +1,35 @@
+sequenceDiagram
+    %% Agent Communication Protocol
+    %% Shows message passing between agents via Redis Streams
+
+    participant M as Maestro
+    participant B as Backend Agent
+    participant F as Frontend Agent
+    participant Redis as Redis Stream
+    participant DB as Postgres
+
+    Note over M, DB: Task: "Add Login Feature"
+
+    M->>Redis: XADD task_stream (features={login})
+    Redis-->>B: XREADGROUP (New Task)
+    Redis-->>F: XREADGROUP (New Task)
+
+    par Parallel Work
+        B->>B: Generate API Endpoint
+        F->>F: Generate React Form
+    end
+
+    B->>Redis: XADD log_stream (API Ready)
+    F->>Redis: XADD log_stream (UI Ready)
+
+    Note over B, F: Dependency Check
+    
+    F->>Redis: XREAD log_stream (Wait to bind API)
+    Redis-->>F: Event: API_READY
+    
+    F->>F: Update fetch() URL
+    F->>Redis: XADD result_stream (Task Complete)
+    B->>Redis: XADD result_stream (Task Complete)
+
+    Redis-->>M: XREAD result_stream
+    M->>DB: Update Project Status

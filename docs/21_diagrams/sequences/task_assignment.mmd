@@ -1,0 +1,23 @@
+sequenceDiagram
+    %% Task Assignment Protocol
+    %% How Maestro delegates work
+
+    participant M as Maestro
+    participant DB as Database
+    participant Q as Redis Queue
+    participant A as Agent (Worker)
+
+    M->>DB: Query Open Tasks
+    DB-->>M: List[Task]
+    
+    loop For Each Task
+        M->>M: Calculate Agent Scores
+        Note right of M: Score based on load, capability, history
+        
+        M->>DB: Update Task (Status=ASSIGNED)
+        M->>Q: Push Task Payload
+        
+        Q-->>A: Pop Task
+        A->>A: Accept Assignment
+        A->>DB: Update Agent State (BUSY)
+    end

@@ -1,0 +1,37 @@
+graph TB
+    %% Tier 3: Planning Layer
+    %% Architect, Research, Product Analyst Agents
+
+    subgraph "Planning Layer"
+        ARCH[Architect Agent\n(System Design)]
+        RES[Research Agent\n(Tech Evaluation)]
+        PROD[Product Analyst\n(Requirements)]
+    end
+
+    subgraph "Input Context"
+        GOAL[High-level Goal]
+        CONSTRAINTS[Technical Constraints]
+    end
+
+    subgraph "Output Artifacts"
+        SPEC[Tech Spec]
+        STORIES[User Stories]
+        ADR[Architecture Decision Records]
+    end
+
+    GOAL --> PROD
+    PROD -->|User Stories| ARCH
+    
+    ARCH -->|Request Info| RES
+    RES -->|Findings| ARCH
+
+    ARCH -->|System Design| SPEC
+    ARCH -->|Decisions| ADR
+    PROD -->|Acceptance Criteria| STORIES
+
+    %% Interaction with Memory
+    RES -.->|Search Patterns| MEM[(Memory)]
+    ARCH -.->|Check Standards| MEM
+
+    classDef plan fill:#9333ea,stroke:#6b21a8,color:white;
+    class ARCH,RES,PROD plan;

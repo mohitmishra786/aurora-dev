@@ -1,0 +1,32 @@
+erDiagram
+    %% Audit Trail Schema
+    %% Immutable log of all system actions
+
+    AUDIT_LOG {
+        uuid id PK
+        timestamp created_at
+        string event_type
+        string actor_role
+        uuid actor_id
+        string resource_type
+        uuid resource_id
+        string ip_address
+        string session_id
+    }
+
+    CHANGE_DETAIL {
+        uuid log_id FK
+        string field_name
+        text old_value
+        text new_value
+    }
+
+    AUDIT_LOG ||--o{ CHANGE_DETAIL : contains
+
+    event_type_enum {
+        string TYPE
+        values "CREATE, UPDATE, DELETE, EXECUTE, ACCESS_DENIED"
+    }
+
+    note for AUDIT_LOG "Partitioned by month for retention"
+    note for CHANGE_DETAIL "Stores specific JSON diffs"

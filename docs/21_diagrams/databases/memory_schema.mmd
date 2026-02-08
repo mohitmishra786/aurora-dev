@@ -1,0 +1,47 @@
+erDiagram
+    %% Memory Schema Diagram
+    %% Postgres pgvector structure
+
+    PROJECT ||--o{ MEMORY_ITEM : owns
+    MEMORY_ITEM ||--o{ EMBEDDING : has
+    MEMORY_ITEM }|--|| ITEM_TYPE : classified_as
+
+    MEMORY_ITEM {
+        uuid id PK
+        uuid project_id FK
+        text content_text
+        jsonb metadata
+        timestamp created_at
+        int access_count
+        float decay_factor
+    }
+
+    item_type_enum {
+        string TYPE
+        values "pattern, code_snippet, requirement, decision"
+    }
+
+    EMBEDDING {
+        uuid item_id FK
+        vector(1536) vector_data
+        string model_version
+    }
+
+    REFLEXION {
+        uuid id PK
+        uuid source_item_id FK
+        text failure_context
+        text improvement_strategy
+        int success_score
+    }
+
+    PATTERN {
+        uuid id PK
+        string name
+        text description
+        vector(1536) embedding
+        int usage_count
+    }
+
+    MEMORY_ITEM ||--o{ REFLEXION : generates
+    REFLEXION }|--|| PATTERN : promotes_to

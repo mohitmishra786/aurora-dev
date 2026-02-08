@@ -1,0 +1,28 @@
+flowchart TD
+    %% Task Execution Flow
+    %% Steps an agent takes to complete a single task
+
+    START[Task Assigned] --> UNDERSTAND{Understand Context}
+    UNDERSTAND -->|Missing Info| ASK[Ask Maestro]
+    UNDERSTAND -->|Clear| PLAN[Create Execution Plan]
+
+    ASK --> UNDERSTAND
+
+    PLAN --> MEMORY[Check Memory for Patterns]
+    MEMORY -->|Found Pattern| ADAPT[Adapt Pattern]
+    MEMORY -->|No Pattern| CREATE[Create New Approach]
+
+    ADAPT --> EXECUTE[Execute Task]
+    CREATE --> EXECUTE
+    
+    EXECUTE --> VERIFY{Self-Correction}
+    VERIFY -->|Failed| REFLECT[Reflexion Loop]
+    REFLECT --> EXECUTE
+    
+    VERIFY -->|Passed| COMMIT[Commit Changes]
+    COMMIT --> REPORT[Report Completion]
+    
+    REPORT --> END[Wait for Next Task]
+
+    classDef process fill:#10b981,stroke:#047857,color:white;
+    class PLAN,EXECUTE,REFLECT,COMMIT process;

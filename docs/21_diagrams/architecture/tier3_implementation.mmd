@@ -1,0 +1,48 @@
+graph TB
+    %% Tier 4: Implementation Layer
+    %% Backend, Frontend, Database, Integration Agents
+
+    subgraph "Implementation Layer"
+        BE[Backend Agent]
+        FE[Frontend Agent]
+        DB[Database Agent]
+        INT[Integration Agent]
+    end
+
+    subgraph "Work Environment"
+        WT_BE[Git Worktree: Backend]
+        WT_FE[Git Worktree: Frontend]
+        WT_DB[Git Worktree: Database]
+    end
+
+    subgraph "Shared Resources"
+        REPO[Code Repository]
+        DEV_DB[(Dev Database)]
+    end
+
+    %% Task Flow
+    TASK_SPEC[Task Specification] --> BE
+    TASK_SPEC --> FE
+    TASK_SPEC --> DB
+    TASK_SPEC --> INT
+
+    %% Backend Flow
+    BE -->|Write Code| WT_BE
+    WT_BE -->|Commit| REPO
+    BE -->|Migrations| DEV_DB
+
+    %% Frontend Flow
+    FE -->|Write Code| WT_FE
+    WT_FE -->|Commit| REPO
+    FE -->|Mock API| BE
+
+    %% Database Flow
+    DB -->|Schema Design| WT_DB
+    WT_DB -->|Apply| DEV_DB
+
+    %% Integration Flow
+    INT -->|Connect APIs| BE
+    INT -->|Connect UI| FE
+
+    classDef impl fill:#0ea5e9,stroke:#0369a1,color:white;
+    class BE,FE,DB,INT impl;
