@@ -20,6 +20,7 @@ from aurora_dev.agents.base_agent import (
     BaseAgent,
 )
 from aurora_dev.core.logging import get_agent_logger
+from aurora_dev.core.memory.redis_store import RedisMemoryStore, REDIS_AVAILABLE
 
 
 class MemoryType(Enum):
@@ -175,10 +176,19 @@ class MemoryCoordinator(BaseAgent):
             session_id=session_id,
         )
         
-        # In-memory storage (production uses Redis + vector DB)
+        # In-memory storage fallback (production uses Redis + vector DB)
         self._short_term: dict[str, MemoryItem] = {}
         self._long_term: dict[str, MemoryItem] = {}
         self._episodic: dict[str, MemoryItem] = {}
+        
+        # Redis-backed persistent storage
+        self._redis_store: Optional[RedisMemoryStore] = None
+        if project_id and REDIS_AVAILABLE:
+            try:
+                self._redis_store = RedisMemoryStore(project_id=project_id)
+                self._logger.info("Redis memory store initialized")
+            except Exception as e:
+                self._logger.warning(f"Redis unavailable, using in-memory: {e}")
         
         # Architecture decisions
         self._adrs: dict[str, ArchitectureDecision] = {}
@@ -238,12 +248,34 @@ class MemoryCoordinator(BaseAgent):
         # Store in appropriate location
         if memory_type == MemoryType.SHORT_TERM:
             self._short_term[memory_id] = item
+            # Also persist to Redis if available
+            if self._redis_store:
+                self._redis_store.store(
+                    memory_id=memory_id,
+                    memory_type="short",
+                    data=item.to_dict(),
+                )
         elif memory_type == MemoryType.LONG_TERM:
             self._long_term[memory_id] = item
             # Generate embedding (simplified)
             self._embeddings[memory_id] = self._simple_embedding(content)
+            # Persist to Redis for long-term (no TTL)
+            if self._redis_store:
+                self._redis_store.store(
+                    memory_id=memory_id,
+                    memory_type="long",
+                    data=item.to_dict(),
+                    ttl_seconds=None,  # No expiration for long-term
+                )
         else:
             self._episodic[memory_id] = item
+            if self._redis_store:
+                self._redis_store.store(
+                    memory_id=memory_id,
+                    memory_type="episodic",
+                    data=item.to_dict(),
+                    ttl_seconds=None,
+                )
         
         self._logger.debug(
             f"Stored memory: {memory_type.value}",

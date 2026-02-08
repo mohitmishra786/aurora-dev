@@ -460,13 +460,14 @@ class OrchestrationEngine:
             "tasks_count": len(task_ids),
             "completed": completed,
             "failures": failed,
+            "architecture": design_result.get("architecture", ""),
         }
     
     async def _execute_parallel_implementation(
         self,
         context: ProjectContext,
     ) -> list[str]:
-        """Execute implementation tasks in parallel.
+        """Execute implementation tasks in parallel using Developer agents.
         
         Args:
             context: Project context.
@@ -474,15 +475,37 @@ class OrchestrationEngine:
         Returns:
             List of task IDs.
         """
+        from aurora_dev.agents.specialized.developers import BackendAgent, FrontendAgent
+        
         task_ids: list[str] = []
         
-        backend_task = self.task_manager.submit(
+        # Execute backend tasks
+        backend_agent = BackendAgent(project_id=context.project_id)
+        backend_task_id = self.task_manager.submit(
             operation="implement_service",
-            parameters={"service_name": "Core", "methods": ["create", "read", "update", "delete"]},
+            parameters={
+                "service_name": "Core",
+                "methods": ["create", "read", "update", "delete"],
+                "agent": backend_agent.agent_id,
+            },
             priority=TaskPriority.HIGH,
             project_id=context.project_id,
         )
-        task_ids.append(backend_task)
+        task_ids.append(backend_task_id)
+        
+        # Execute frontend tasks if tech_stack includes frontend
+        if any(ts.lower() in ["react", "vue", "angular", "nextjs"] for ts in context.tech_stack):
+            frontend_agent = FrontendAgent(project_id=context.project_id)
+            frontend_task_id = self.task_manager.submit(
+                operation="implement_component",
+                parameters={
+                    "component_name": "App",
+                    "agent": frontend_agent.agent_id,
+                },
+                priority=TaskPriority.HIGH,
+                project_id=context.project_id,
+            )
+            task_ids.append(frontend_task_id)
         
         return task_ids
     
@@ -490,7 +513,7 @@ class OrchestrationEngine:
         self,
         context: ProjectContext,
     ) -> list[str]:
-        """Execute implementation tasks sequentially.
+        """Execute implementation tasks sequentially using Developer agents.
         
         Args:
             context: Project context.
@@ -498,11 +521,34 @@ class OrchestrationEngine:
         Returns:
             List of task IDs.
         """
+        from aurora_dev.agents.specialized.developers import BackendAgent
+        
         task_ids: list[str] = []
         
+        # Create backend agent for sequential execution
+        backend_agent = BackendAgent(project_id=context.project_id)
+        
+        # Execute a basic health endpoint as first task
+        response = await asyncio.to_thread(
+            backend_agent.execute,
+            {
+                "operation": "implement_endpoint",
+                "endpoint": "/api/health",
+                "method": "GET",
+                "description": "Health check endpoint",
+                "language": "python",
+                "framework": "fastapi",
+            },
+        )
+        
+        # Submit result to task manager for tracking
         task_id = self.task_manager.submit(
             operation="implement_endpoint",
-            parameters={"endpoint": "/api/health", "method": "GET"},
+            parameters={
+                "endpoint": "/api/health",
+                "method": "GET",
+                "result": response.content if hasattr(response, "content") else str(response),
+            },
             priority=TaskPriority.MEDIUM,
             project_id=context.project_id,
         )
@@ -515,7 +561,7 @@ class OrchestrationEngine:
         context: ProjectContext,
         impl_result: dict[str, Any],
     ) -> dict[str, Any]:
-        """Execute the testing phase.
+        """Execute the testing phase using TestEngineer agent.
         
         Args:
             context: Project context.
@@ -524,17 +570,24 @@ class OrchestrationEngine:
         Returns:
             Testing results.
         """
-        task_id = self.task_manager.submit(
-            operation="generate_tests",
-            parameters={"code": "", "coverage_target": 0.75},
-            priority=TaskPriority.HIGH,
-            project_id=context.project_id,
+        from aurora_dev.agents.specialized.quality import TestEngineerAgent
+        
+        test_agent = TestEngineerAgent(project_id=context.project_id)
+        
+        response = await asyncio.to_thread(
+            test_agent.execute,
+            {
+                "operation": "generate_tests",
+                "code": impl_result.get("architecture", ""),
+                "coverage_target": 0.75,
+            },
         )
         
         logger.info("Testing phase complete")
         
         return {
-            "test_task_id": task_id,
+            "test_result": response.content if hasattr(response, "content") else str(response),
+            "success": response.success if hasattr(response, "success") else True,
             "coverage_target": 0.75,
         }
     

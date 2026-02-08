@@ -42,6 +42,18 @@ except ImportError:
     MemoryRecord = None  # type: ignore
     AgentMem0 = None  # type: ignore
 
+# Redis store (optional)
+try:
+    from aurora_dev.core.memory.redis_store import (
+        RedisMemoryStore,
+        get_memory_store,
+        REDIS_AVAILABLE,
+    )
+except ImportError:
+    RedisMemoryStore = None  # type: ignore
+    get_memory_store = None  # type: ignore
+    REDIS_AVAILABLE = False
+
 __all__ = [
     "MemoryCompressor",
     "CompressionResult",

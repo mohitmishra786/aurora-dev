@@ -85,6 +85,33 @@ class ShortTermMemory:
         return await self.redis.hgetall(f"session:{session_id}:context")
 ```
 
+### RedisMemoryStore Implementation
+
+The `RedisMemoryStore` class in `aurora_dev/core/memory/redis_store.py` provides persistent storage for the `MemoryCoordinator` agent:
+
+```python
+from aurora_dev.core.memory.redis_store import RedisMemoryStore
+
+# Initialize store for a project
+store = RedisMemoryStore(project_id="my-project")
+
+# Store a memory item
+store.store(
+    memory_id="mem-123",
+    memory_type="short",  # short, long, or episodic
+    data={"content": "...", "tags": ["api", "auth"]},
+    ttl_seconds=3600  # 1 hour for short-term
+)
+
+# Retrieve
+item = store.retrieve("mem-123", "short")
+
+# List all IDs of a type
+ids = store.list_ids("short")
+```
+
+Key format: `aurora:memory:{project_id}:{type}:{memory_id}`
+
 ## Working Memory (PostgreSQL)
 
 ### Purpose

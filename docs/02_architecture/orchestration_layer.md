@@ -48,19 +48,36 @@ graph LR
 
 ### Implementation Details
 
+The `OrchestrationEngine` in `aurora_dev/core/orchestrator/engine.py` coordinates project phases with real agent integration:
+
 ```python
-class MaestroAgent(BaseAgent):
-    role = AgentRole.MAESTRO
+class OrchestrationEngine:
+    """Main orchestration engine coordinating all project phases."""
     
-    def decompose_requirements(self, user_input: str) -> TaskGraph:
-        """Parse requirements into task dependency graph."""
-        
-    def assign_task(self, task: Task) -> Agent:
-        """Select optimal agent for task execution."""
-        
-    def handle_failure(self, task: Task, error: str) -> RetryStrategy:
-        """Determine retry or escalation strategy."""
+    async def _execute_planning_phase(self, context: ProjectContext):
+        # Uses MaestroAgent to decompose goals
+        maestro = MaestroAgent(project_id=context.project_id)
+        tasks = maestro.decompose_goal(context.goal, {...})
+        return {"tasks": tasks, "task_count": len(tasks)}
+    
+    async def _execute_implementation_phase(self, context, design_result):
+        # Uses BackendAgent/FrontendAgent for code generation
+        backend_agent = BackendAgent(project_id=context.project_id)
+        response = backend_agent.execute({
+            "operation": "implement_endpoint",
+            "endpoint": "/api/health",
+            "language": "python",
+            "framework": "fastapi"
+        })
+        return response
+    
+    async def _execute_testing_phase(self, context, impl_result):
+        # Uses TestEngineerAgent for test generation
+        test_agent = TestEngineerAgent(project_id=context.project_id)
+        return test_agent.execute({"operation": "generate_tests", ...})
 ```
+
+**DockerRunner Integration:** Generated code is validated using the `DockerRunner` for safe execution in isolated containers before committing.
 
 ### Task Decomposition Process
 
