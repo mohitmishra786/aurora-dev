@@ -300,6 +300,11 @@ class DockerRunner(BaseTool):
     Runs commands inside Docker containers for
     isolated and reproducible execution.
     
+    Supports optional security sandbox mode with:
+    - Network isolation policies
+    - Resource limits (CPU, memory, disk I/O)
+    - Secure secret injection
+    
     Config:
         image: Docker image to use
         command: Command to run inside container
@@ -307,7 +312,34 @@ class DockerRunner(BaseTool):
         env: Environment variables (optional)
         network: Network mode (optional)
         remove: Remove container after run (default: True)
+        secure_mode: Enable security sandbox (optional)
+        resource_limits: Resource constraints (optional)
+        network_policy: Network isolation policy (optional)
     """
+    
+    def __init__(self):
+        """Initialize DockerRunner with optional security sandbox."""
+        super().__init__()
+        self._sandbox = None
+    
+    def _get_sandbox(self):
+        """Lazy-load security sandbox to avoid import cycles."""
+        if self._sandbox is None:
+            try:
+                from aurora_dev.tools.security_sandbox import (
+                    SecureSandbox,
+                    SandboxConfig,
+                    NetworkPolicy,
+                    ResourceLimits,
+                )
+                self._sandbox_available = True
+                self._SecureSandbox = SecureSandbox
+                self._SandboxConfig = SandboxConfig
+                self._NetworkPolicy = NetworkPolicy
+                self._ResourceLimits = ResourceLimits
+            except ImportError:
+                self._sandbox_available = False
+        return self._sandbox_available
     
     @property
     def name(self) -> str:
@@ -335,16 +367,38 @@ class DockerRunner(BaseTool):
         return True, None
     
     async def run(self, config: dict[str, Any]) -> ToolResult:
-        """Run command in Docker container."""
+        """Run command in Docker container.
+        
+        Args:
+            config: Configuration dict with:
+                - image: Docker image name
+                - command: Command to run
+                - volumes: Optional volume mounts
+                - env: Optional environment variables
+                - network: Optional network mode
+                - remove: Remove container after (default: True)
+                - secure_mode: Enable security sandbox
+                - resource_limits: CPU/memory limits dict
+                - network_policy: Network isolation policy string
+        
+        Returns:
+            ToolResult with stdout, stderr, and exit code.
+        """
         image = config["image"]
         command = config["command"]
         volumes = config.get("volumes", [])
         env = config.get("env", {})
         network = config.get("network")
         remove = config.get("remove", True)
+        secure_mode = config.get("secure_mode", False)
         
         start_time = time.time()
         
+        # Use security sandbox if requested and available
+        if secure_mode and self._get_sandbox():
+            return await self._run_secure(config, start_time)
+        
+        # Standard Docker execution
         # Build docker run command
         docker_cmd = ["docker", "run"]
         
@@ -411,6 +465,105 @@ class DockerRunner(BaseTool):
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
             self._logger.error(f"Docker execution failed: {e}")
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.FAILED,
+                output=None,
+                error=str(e),
+                duration_ms=duration_ms,
+            )
+    
+    async def _run_secure(self, config: dict[str, Any], start_time: float) -> ToolResult:
+        """Run command with security sandbox.
+        
+        Applies network policies, resource limits, and secure configuration.
+        """
+        image = config["image"]
+        command = config["command"]
+        volumes = config.get("volumes", [])
+        env = config.get("env", {})
+        
+        # Parse resource limits
+        resource_config = config.get("resource_limits", {})
+        resource_limits = self._ResourceLimits(
+            cpu_limit=resource_config.get("cpu_limit", 1.0),
+            memory_limit=resource_config.get("memory_limit", "512m"),
+            disk_io_limit=resource_config.get("disk_io_limit"),
+            max_processes=resource_config.get("max_processes", 50),
+            timeout_seconds=config.get("timeout", self.timeout_seconds),
+        )
+        
+        # Parse network policy
+        network_policy_str = config.get("network_policy", "RESTRICTED")
+        try:
+            network_policy = self._NetworkPolicy[network_policy_str.upper()]
+        except KeyError:
+            network_policy = self._NetworkPolicy.RESTRICTED
+        
+        # Create sandbox config
+        sandbox_config = self._SandboxConfig(
+            network_policy=network_policy,
+            resource_limits=resource_limits,
+            allowed_hosts=config.get("allowed_hosts", []),
+            read_only_root=config.get("read_only_root", True),
+        )
+        
+        # Create and run sandbox
+        sandbox = self._SecureSandbox(sandbox_config)
+        
+        self._logger.info(
+            f"Running secure Docker: {image} - {command[:50]}... "
+            f"(policy={network_policy.name})"
+        )
+        
+        try:
+            # Convert volumes to dict format
+            volume_dict = {}
+            for vol in volumes:
+                if ":" in vol:
+                    host, container = vol.split(":", 1)
+                    volume_dict[host] = container
+            
+            exit_code, stdout, stderr = await sandbox.run(
+                image=image,
+                command=command.split() if isinstance(command, str) else command,
+                volumes=volume_dict,
+                env=env,
+            )
+            
+            duration_ms = (time.time() - start_time) * 1000
+            success = exit_code == 0
+            
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.SUCCESS if success else ToolStatus.FAILED,
+                output={
+                    "stdout": stdout,
+                    "stderr": stderr,
+                },
+                error=stderr if not success else None,
+                exit_code=exit_code,
+                duration_ms=duration_ms,
+                metadata={
+                    "image": image,
+                    "command": command,
+                    "secure_mode": True,
+                    "network_policy": network_policy.name,
+                },
+            )
+            
+        except asyncio.TimeoutError:
+            duration_ms = (time.time() - start_time) * 1000
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.TIMEOUT,
+                output=None,
+                error=f"Secure container timed out after {resource_limits.timeout_seconds}s",
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self._logger.error(f"Secure Docker execution failed: {e}")
             return ToolResult(
                 tool_name=self.name,
                 status=ToolStatus.FAILED,

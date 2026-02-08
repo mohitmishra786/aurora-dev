@@ -381,6 +381,198 @@ class StateMachine:
             reason="user_cancelled",
         )
     
+    def pause_workflow(
+        self,
+        workflow_id: str,
+        reason: str = "manual_pause",
+    ) -> bool:
+        """Pause a workflow for human intervention.
+        
+        Serializes workflow context and transitions to PAUSED state.
+        Context is stored in Redis for later resume.
+        
+        Args:
+            workflow_id: Workflow identifier.
+            reason: Reason for pausing.
+            
+        Returns:
+            True if workflow was paused successfully.
+        """
+        state = self.get_workflow(workflow_id)
+        if state is None:
+            return False
+        
+        if state.is_terminal or state.is_paused:
+            logger.warning(f"Cannot pause workflow {workflow_id}: already paused or terminal")
+            return False
+        
+        # Store pause context in Redis
+        if self._persist and self._redis:
+            pause_data = {
+                "reason": reason,
+                "paused_at": datetime.now(timezone.utc).isoformat(),
+                "resume_phase": state.current_phase.value,
+                "context": json.dumps(state.data),
+            }
+            try:
+                pause_key = f"{self._prefix}{workflow_id}:pause"
+                self._redis.hset(pause_key, mapping=pause_data)
+                self._redis.expire(pause_key, 86400 * 7)  # 7 days TTL
+            except Exception as e:
+                logger.error(f"Failed to save pause data: {e}")
+        
+        # Store resume phase in workflow data for transition rules
+        state.data["resume_phase"] = state.current_phase.value
+        state.data["phase_before_pause"] = state.current_phase.value
+        
+        success = self.force_transition(
+            workflow_id,
+            WorkflowPhase.PAUSED,
+            reason=reason,
+        )
+        
+        if success:
+            logger.info(f"Paused workflow {workflow_id}: {reason}")
+        
+        return success
+    
+    def resume_workflow(
+        self,
+        workflow_id: str,
+        approval_data: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        """Resume a paused workflow after approval.
+        
+        Restores context and transitions to the appropriate phase.
+        
+        Args:
+            workflow_id: Workflow identifier.
+            approval_data: Optional approval metadata (reviewer_id, comments, etc).
+            
+        Returns:
+            True if workflow was resumed successfully.
+        """
+        state = self.get_workflow(workflow_id)
+        if state is None:
+            return False
+        
+        if not state.is_paused:
+            logger.warning(f"Cannot resume workflow {workflow_id}: not paused")
+            return False
+        
+        # Get resume phase from stored context
+        resume_phase_str = state.data.get("resume_phase")
+        if resume_phase_str is None:
+            # Try to load from Redis
+            if self._persist and self._redis:
+                try:
+                    pause_key = f"{self._prefix}{workflow_id}:pause"
+                    pause_data = self._redis.hgetall(pause_key)
+                    if pause_data:
+                        resume_phase_str = pause_data.get("resume_phase")
+                except Exception as e:
+                    logger.error(f"Failed to load pause data: {e}")
+        
+        if resume_phase_str is None:
+            logger.error(f"Cannot resume workflow {workflow_id}: no resume phase found")
+            return False
+        
+        try:
+            resume_phase = WorkflowPhase(resume_phase_str)
+        except ValueError:
+            logger.error(f"Invalid resume phase: {resume_phase_str}")
+            return False
+        
+        # Store approval data
+        if approval_data:
+            state.data["approval"] = approval_data
+            state.data["approved_at"] = datetime.now(timezone.utc).isoformat()
+        
+        # Clean up pause context
+        if self._persist and self._redis:
+            try:
+                pause_key = f"{self._prefix}{workflow_id}:pause"
+                self._redis.delete(pause_key)
+            except Exception as e:
+                logger.warning(f"Failed to clean up pause data: {e}")
+        
+        # Force transition to resume phase (bypass normal rules)
+        success = self.force_transition(
+            workflow_id,
+            resume_phase,
+            reason="resumed_after_approval",
+        )
+        
+        if success:
+            logger.info(f"Resumed workflow {workflow_id} to phase: {resume_phase.value}")
+        
+        return success
+    
+    def await_approval(
+        self,
+        workflow_id: str,
+        checkpoint: str = "manual",
+    ) -> bool:
+        """Transition workflow to awaiting approval state.
+        
+        Used at configured breakpoints to request human review.
+        
+        Args:
+            workflow_id: Workflow identifier.
+            checkpoint: Name of the checkpoint (e.g., 'post_design', 'pre_deploy').
+            
+        Returns:
+            True if workflow is now awaiting approval.
+        """
+        state = self.get_workflow(workflow_id)
+        if state is None:
+            return False
+        
+        if state.is_terminal or state.is_paused:
+            return False
+        
+        # Store checkpoint context
+        state.data["phase_before_pause"] = state.current_phase.value
+        state.data["approval_checkpoint"] = checkpoint
+        state.data["approval_requested_at"] = datetime.now(timezone.utc).isoformat()
+        
+        # Store in Redis for persistence
+        if self._persist and self._redis:
+            pause_data = {
+                "checkpoint": checkpoint,
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+                "resume_phase": state.current_phase.value,
+                "context": json.dumps(state.data),
+            }
+            try:
+                pause_key = f"{self._prefix}{workflow_id}:pause"
+                self._redis.hset(pause_key, mapping=pause_data)
+                self._redis.expire(pause_key, 86400 * 7)
+            except Exception as e:
+                logger.error(f"Failed to save approval request: {e}")
+        
+        success = self.force_transition(
+            workflow_id,
+            WorkflowPhase.AWAITING_APPROVAL,
+            reason=f"breakpoint:{checkpoint}",
+        )
+        
+        if success:
+            logger.info(f"Workflow {workflow_id} awaiting approval at checkpoint: {checkpoint}")
+        
+        return success
+    
+    def list_pending_approvals(self) -> list[WorkflowState]:
+        """List all workflows awaiting approval.
+        
+        Returns:
+            List of workflows in PAUSED or AWAITING_APPROVAL state.
+        """
+        return [
+            w for w in self.workflows.values()
+            if w.is_paused
+        ]
+    
     def on_enter(
         self,
         phase: WorkflowPhase,

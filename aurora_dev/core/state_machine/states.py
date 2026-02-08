@@ -13,9 +13,11 @@ from typing import Any, Callable, Optional
 class WorkflowPhase(Enum):
     """Workflow execution phases.
     
-    Defines the phases of a development workflow.
+    Defines the phases of a development workflow, including
+    human-in-the-loop control states.
     """
     
+    # Active workflow phases
     IDLE = "idle"
     REQUIREMENTS = "requirements"
     DESIGN = "design"
@@ -26,6 +28,12 @@ class WorkflowPhase(Enum):
     DOCUMENTATION = "documentation"
     DEPLOYMENT = "deployment"
     MONITORING = "monitoring"
+    
+    # Human-in-the-loop control states
+    PAUSED = "paused"                      # Workflow paused for human review
+    AWAITING_APPROVAL = "awaiting_approval"  # Blocked on human approval
+    
+    # Terminal states
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -34,7 +42,8 @@ class WorkflowPhase(Enum):
 class TransitionType(Enum):
     """Types of state transitions.
     
-    Categorizes how transitions occur.
+    Categorizes how transitions occur, including
+    human-in-the-loop approval types.
     """
     
     AUTOMATIC = "automatic"
@@ -42,6 +51,10 @@ class TransitionType(Enum):
     CONDITIONAL = "conditional"
     TIMEOUT = "timeout"
     ERROR = "error"
+    
+    # Human-in-the-loop transition types
+    HUMAN_APPROVAL = "human_approval"  # Requires human sign-off to proceed
+    BREAKPOINT = "breakpoint"          # Automatic pause at configured points
 
 
 @dataclass
@@ -136,6 +149,18 @@ class WorkflowState:
         }
     
     @property
+    def is_paused(self) -> bool:
+        """Check if workflow is paused for human intervention.
+        
+        Returns:
+            True if workflow is paused or awaiting approval.
+        """
+        return self.current_phase in {
+            WorkflowPhase.PAUSED,
+            WorkflowPhase.AWAITING_APPROVAL,
+        }
+    
+    @property
     def phase_duration_seconds(self) -> float:
         """Calculate current phase duration.
         
@@ -197,6 +222,7 @@ class WorkflowState:
             "phase_duration_seconds": self.phase_duration_seconds,
             "total_duration_seconds": self.total_duration_seconds,
             "is_terminal": self.is_terminal,
+            "is_paused": self.is_paused,
             "error": self.error,
             "metadata": self.metadata,
         }
@@ -290,6 +316,105 @@ def get_default_transitions() -> list[TransitionRule]:
             description="Review requested changes, return to implementation",
         ),
     ]
+
+
+def get_collaborative_transitions() -> list[TransitionRule]:
+    """Get transition rules for collaborative (human-in-the-loop) mode.
+    
+    Includes breakpoints that pause workflow for human review
+    at key decision points.
+    
+    Returns:
+        List of collaborative mode transition rules.
+    """
+    base_transitions = get_default_transitions()
+    
+    # Add breakpoint transitions for collaborative mode
+    collaborative_transitions = [
+        # Breakpoint: After design phase for architecture review
+        TransitionRule(
+            from_phase=WorkflowPhase.DESIGN,
+            to_phase=WorkflowPhase.AWAITING_APPROVAL,
+            transition_type=TransitionType.BREAKPOINT,
+            description="Pause for architecture review before implementation",
+        ),
+        TransitionRule(
+            from_phase=WorkflowPhase.AWAITING_APPROVAL,
+            to_phase=WorkflowPhase.IMPLEMENTATION,
+            transition_type=TransitionType.HUMAN_APPROVAL,
+            condition=lambda ctx: ctx.get("phase_before_pause") == "design",
+            description="Resume implementation after architecture approval",
+        ),
+        
+        # Breakpoint: Pre-deployment approval
+        TransitionRule(
+            from_phase=WorkflowPhase.SECURITY_AUDIT,
+            to_phase=WorkflowPhase.AWAITING_APPROVAL,
+            transition_type=TransitionType.BREAKPOINT,
+            description="Pause for deployment approval after security audit",
+        ),
+        TransitionRule(
+            from_phase=WorkflowPhase.AWAITING_APPROVAL,
+            to_phase=WorkflowPhase.DEPLOYMENT,
+            transition_type=TransitionType.HUMAN_APPROVAL,
+            condition=lambda ctx: ctx.get("phase_before_pause") == "security_audit",
+            description="Resume deployment after approval",
+        ),
+        
+        # Manual pause from any active phase
+        TransitionRule(
+            from_phase=WorkflowPhase.REQUIREMENTS,
+            to_phase=WorkflowPhase.PAUSED,
+            transition_type=TransitionType.MANUAL,
+            description="Manually pause during requirements",
+        ),
+        TransitionRule(
+            from_phase=WorkflowPhase.IMPLEMENTATION,
+            to_phase=WorkflowPhase.PAUSED,
+            transition_type=TransitionType.MANUAL,
+            description="Manually pause during implementation",
+        ),
+        TransitionRule(
+            from_phase=WorkflowPhase.TESTING,
+            to_phase=WorkflowPhase.PAUSED,
+            transition_type=TransitionType.MANUAL,
+            description="Manually pause during testing",
+        ),
+        
+        # Resume from paused state
+        TransitionRule(
+            from_phase=WorkflowPhase.PAUSED,
+            to_phase=WorkflowPhase.REQUIREMENTS,
+            transition_type=TransitionType.HUMAN_APPROVAL,
+            condition=lambda ctx: ctx.get("resume_phase") == "requirements",
+            description="Resume to requirements after pause",
+        ),
+        TransitionRule(
+            from_phase=WorkflowPhase.PAUSED,
+            to_phase=WorkflowPhase.IMPLEMENTATION,
+            transition_type=TransitionType.HUMAN_APPROVAL,
+            condition=lambda ctx: ctx.get("resume_phase") == "implementation",
+            description="Resume to implementation after pause",
+        ),
+        TransitionRule(
+            from_phase=WorkflowPhase.PAUSED,
+            to_phase=WorkflowPhase.TESTING,
+            transition_type=TransitionType.HUMAN_APPROVAL,
+            condition=lambda ctx: ctx.get("resume_phase") == "testing",
+            description="Resume to testing after pause",
+        ),
+        
+        # Rejection from awaiting approval
+        TransitionRule(
+            from_phase=WorkflowPhase.AWAITING_APPROVAL,
+            to_phase=WorkflowPhase.CANCELLED,
+            transition_type=TransitionType.HUMAN_APPROVAL,
+            condition=lambda ctx: ctx.get("approval_rejected", False),
+            description="Workflow cancelled due to rejection",
+        ),
+    ]
+    
+    return base_transitions + collaborative_transitions
 
 
 if __name__ == "__main__":
