@@ -1,0 +1,175 @@
+# AURORA-DEV Production Docker Compose
+# Full production stack with Redis, PostgreSQL, Prometheus, and Grafana
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # AURORA-DEV API Server
+  # =============================================================================
+  aurora-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aurora-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - AURORA_REDIS_URL=redis://redis:6379/0
+      - AURORA_DATABASE_URL=postgresql://aurora:aurora_secret@postgres:5432/aurora_dev
+      - AURORA_LOG_LEVEL=INFO
+      - AURORA_RATE_LIMITING=true
+      - AURORA_CIRCUIT_BREAKER=true
+    depends_on:
+      - redis
+      - postgres
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - aurora-network
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=8000"
+
+  # =============================================================================
+  # Celery Worker
+  # =============================================================================
+  aurora-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aurora-worker
+    command: celery -A aurora_dev.core.task_queue worker --loglevel=info --concurrency=4
+    restart: unless-stopped
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - AURORA_REDIS_URL=redis://redis:6379/0
+      - AURORA_DATABASE_URL=postgresql://aurora:aurora_secret@postgres:5432/aurora_dev
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - aurora-network
+
+  # =============================================================================
+  # Celery Beat Scheduler
+  # =============================================================================
+  aurora-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aurora-beat
+    command: celery -A aurora_dev.core.task_queue beat --loglevel=info
+    restart: unless-stopped
+    environment:
+      - AURORA_REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - aurora-network
+
+  # =============================================================================
+  # Redis
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: aurora-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aurora-network
+
+  # =============================================================================
+  # PostgreSQL
+  # =============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: aurora-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=aurora
+      - POSTGRES_PASSWORD=aurora_secret
+      - POSTGRES_DB=aurora_dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U aurora -d aurora_dev" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aurora-network
+
+  # =============================================================================
+  # Prometheus Metrics
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: aurora-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - aurora-network
+
+  # =============================================================================
+  # Grafana Dashboards
+  # =============================================================================
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: aurora-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=aurora_admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - aurora-network
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  redis-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+
+    # =============================================================================
+    # Networks
+    # =============================================================================
+networks:
+  aurora-network:
+    driver: bridge

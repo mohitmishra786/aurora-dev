@@ -1,0 +1,127 @@
+# AURORA-DEV API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aurora-api
+  namespace: aurora-dev
+  labels:
+    app.kubernetes.io/name: aurora-api
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aurora-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aurora-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: aurora-api
+          image: aurora-dev:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aurora-secrets
+                  key: anthropic-api-key
+            - name: AURORA_REDIS_URL
+              value: "redis://redis:6379/0"
+            - name: AURORA_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aurora-secrets
+                  key: database-url
+            - name: AURORA_LOG_LEVEL
+              value: "INFO"
+            - name: AURORA_RATE_LIMITING
+              value: "true"
+            - name: AURORA_CIRCUIT_BREAKER
+              value: "true"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      restartPolicy: Always
+
+---
+# AURORA-DEV Worker Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aurora-worker
+  namespace: aurora-dev
+  labels:
+    app.kubernetes.io/name: aurora-worker
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aurora-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aurora-worker
+    spec:
+      containers:
+        - name: aurora-worker
+          image: aurora-dev:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - celery
+            - -A
+            - aurora_dev.core.task_queue
+            - worker
+            - --loglevel=info
+            - --concurrency=4
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aurora-secrets
+                  key: anthropic-api-key
+            - name: AURORA_REDIS_URL
+              value: "redis://redis:6379/0"
+            - name: AURORA_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aurora-secrets
+                  key: database-url
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+      restartPolicy: Always

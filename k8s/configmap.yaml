@@ -1,0 +1,47 @@
+# AURORA-DEV Secrets Template
+# IMPORTANT: Replace placeholder values before applying
+# In production, use a secrets manager like HashiCorp Vault or AWS Secrets Manager
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aurora-secrets
+  namespace: aurora-dev
+  labels:
+    app.kubernetes.io/name: aurora-dev
+    app.kubernetes.io/component: secrets
+type: Opaque
+stringData:
+  # Replace with your actual Anthropic API key
+  anthropic-api-key: "sk-ant-REPLACE_WITH_YOUR_KEY"
+  
+  # PostgreSQL connection string
+  database-url: "postgresql://aurora:aurora_secret@postgres:5432/aurora_dev"
+
+---
+# ConfigMap for non-sensitive configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aurora-config
+  namespace: aurora-dev
+  labels:
+    app.kubernetes.io/name: aurora-dev
+    app.kubernetes.io/component: config
+data:
+  # Logging
+  AURORA_LOG_LEVEL: "INFO"
+  AURORA_LOG_FORMAT: "json"
+  
+  # Feature flags
+  AURORA_RATE_LIMITING: "true"
+  AURORA_CIRCUIT_BREAKER: "true"
+  AURORA_ENABLE_REFLEXION: "true"
+  
+  # Agent settings
+  AURORA_MAX_CONCURRENT_AGENTS: "5"
+  AURORA_DEFAULT_MODEL: "claude-sonnet-4-20250514"
+  AURORA_MAX_RETRIES: "3"
+  
+  # Redis
+  AURORA_REDIS_URL: "redis://redis:6379/0"

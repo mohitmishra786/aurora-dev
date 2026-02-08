@@ -1,0 +1,8 @@
+# AURORA-DEV Kubernetes Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aurora-dev
+  labels:
+    app.kubernetes.io/name: aurora-dev
+    app.kubernetes.io/component: infrastructure
