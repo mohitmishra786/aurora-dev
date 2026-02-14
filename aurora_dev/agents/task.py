@@ -76,13 +76,19 @@ class TaskType(Enum):
 
 
 class TaskComplexity(Enum):
-    """Task complexity ratings."""
+    """Task complexity ratings (1-10 scale)."""
     
-    TRIVIAL = 1  # Simple, well-defined task
-    LOW = 2      # Straightforward with minor decisions
-    MEDIUM = 3   # Requires some analysis and planning
-    HIGH = 4     # Complex, multiple components
-    VERY_HIGH = 5  # Highly complex, significant uncertainty
+    TRIVIAL = 1        # Trivial, no analysis needed
+    VERY_LOW = 2       # Minimal changes, well-defined
+    LOW = 3            # Straightforward with minor decisions
+    LOW_MEDIUM = 4     # Some planning, limited scope
+    MEDIUM = 5         # Requires analysis and planning
+    MEDIUM_HIGH = 6    # Multiple components, cross-cutting
+    HIGH = 7           # Complex, significant design decisions
+    VERY_HIGH = 8      # Highly complex, multiple subsystems
+    CRITICAL = 9       # Architectural changes, high risk
+    EXTREME = 10       # System-wide refactor, maximum uncertainty
+
 
 
 class TaskResult(BaseModel):

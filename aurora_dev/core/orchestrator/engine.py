@@ -469,6 +469,9 @@ class OrchestrationEngine:
     ) -> list[str]:
         """Execute implementation tasks in parallel using Developer agents.
         
+        Uses Git worktrees to give each agent an isolated checkout
+        of the repository, preventing file conflicts.
+        
         Args:
             context: Project context.
             
@@ -476,17 +479,40 @@ class OrchestrationEngine:
             List of task IDs.
         """
         from aurora_dev.agents.specialized.developers import BackendAgent, FrontendAgent
+        from aurora_dev.tools.git_worktree import GitWorktreeManager
+        from aurora_dev.tools.merge_resolver import MergeConflictResolver
         
         task_ids: list[str] = []
+        worktree_mgr = None
+        repo_path = context.metadata.get("repo_path", ".")
+        
+        # Initialize worktree manager for parallel isolation
+        try:
+            worktree_mgr = GitWorktreeManager(repo_path=repo_path)
+        except Exception as e:
+            logger.warning(f"Worktree manager unavailable, falling back to shared repo: {e}")
         
         # Execute backend tasks
         backend_agent = BackendAgent(project_id=context.project_id)
+        backend_worktree = None
+        
+        if worktree_mgr:
+            try:
+                backend_worktree = await worktree_mgr.create_worktree(
+                    branch_name=f"agent/{backend_agent.agent_id}/backend",
+                    agent_id=backend_agent.agent_id,
+                )
+                logger.info(f"Created worktree for backend agent at {backend_worktree}")
+            except Exception as e:
+                logger.warning(f"Failed to create worktree for backend: {e}")
+        
         backend_task_id = self.task_manager.submit(
             operation="implement_service",
             parameters={
                 "service_name": "Core",
                 "methods": ["create", "read", "update", "delete"],
                 "agent": backend_agent.agent_id,
+                "worktree_path": backend_worktree,
             },
             priority=TaskPriority.HIGH,
             project_id=context.project_id,
@@ -496,16 +522,50 @@ class OrchestrationEngine:
         # Execute frontend tasks if tech_stack includes frontend
         if any(ts.lower() in ["react", "vue", "angular", "nextjs"] for ts in context.tech_stack):
             frontend_agent = FrontendAgent(project_id=context.project_id)
+            frontend_worktree = None
+            
+            if worktree_mgr:
+                try:
+                    frontend_worktree = await worktree_mgr.create_worktree(
+                        branch_name=f"agent/{frontend_agent.agent_id}/frontend",
+                        agent_id=frontend_agent.agent_id,
+                    )
+                    logger.info(f"Created worktree for frontend agent at {frontend_worktree}")
+                except Exception as e:
+                    logger.warning(f"Failed to create worktree for frontend: {e}")
+            
             frontend_task_id = self.task_manager.submit(
                 operation="implement_component",
                 parameters={
                     "component_name": "App",
                     "agent": frontend_agent.agent_id,
+                    "worktree_path": frontend_worktree,
                 },
                 priority=TaskPriority.HIGH,
                 project_id=context.project_id,
             )
             task_ids.append(frontend_task_id)
+        
+        # Merge worktrees back after implementation
+        if worktree_mgr:
+            try:
+                merger = MergeConflictResolver(repo_path=repo_path)
+                worktrees = await worktree_mgr.list_worktrees()
+                for wt in worktrees:
+                    if wt.branch and wt.branch.startswith("agent/"):
+                        result = await merger.merge_worktree(
+                            source_branch=wt.branch,
+                            target_branch="main",
+                        )
+                        if result.conflicts:
+                            for conflict_file in result.conflicts:
+                                await merger.auto_resolve(conflict_file)
+                                logger.info(f"Auto-resolved conflict in {conflict_file}")
+                
+                await worktree_mgr.cleanup_all()
+                logger.info("All agent worktrees cleaned up")
+            except Exception as e:
+                logger.warning(f"Worktree merge/cleanup failed: {e}")
         
         return task_ids
     

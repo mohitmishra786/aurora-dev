@@ -69,6 +69,23 @@ class ResearchAgent(BaseAgent):
         self._research_cache: dict[str, dict[str, Any]] = {}
         self._findings: list[dict[str, Any]] = []
         
+        # Initialize external research tool clients
+        try:
+            from aurora_dev.tools.research_tools import (
+                GitHubSearchClient,
+                PackageRegistryClient,
+                WebSearchClient,
+            )
+            self._github_client = GitHubSearchClient()
+            self._package_client = PackageRegistryClient()
+            self._web_client = WebSearchClient()
+            self._logger.info("External research tools initialized")
+        except Exception as e:
+            self._github_client = None
+            self._package_client = None
+            self._web_client = None
+            self._logger.warning(f"Research tools unavailable: {e}")
+        
         self._logger.info("Research Agent initialized")
     
     @property

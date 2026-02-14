@@ -1,12 +1,8 @@
-"""
-Quality Assurance Agents for AURORA-DEV.
-
-This module contains the QA tier agents:
-- TestEngineerAgent: Test generation and execution
-- SecurityAuditorAgent: Security scanning and vulnerability assessment
-- CodeReviewerAgent: Code quality and best practices
-"""
 import json
+import asyncio
+import subprocess
+import logging
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from aurora_dev.agents.base_agent import (
@@ -16,6 +12,392 @@ from aurora_dev.agents.base_agent import (
     BaseAgent,
 )
 
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# DAST Scanner (Gap B1)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DASTFinding:
+    """A finding from dynamic security testing."""
+    
+    alert: str
+    risk: str  # High, Medium, Low, Informational
+    confidence: str  # High, Medium, Low
+    url: str = ""
+    description: str = ""
+    solution: str = ""
+    cwe_id: int = 0
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "alert": self.alert,
+            "risk": self.risk,
+            "confidence": self.confidence,
+            "url": self.url,
+            "description": self.description,
+            "solution": self.solution,
+            "cwe_id": self.cwe_id,
+        }
+
+
+class DynamicSecurityScanner:
+    """DAST scanner using OWASP ZAP for runtime vulnerability detection.
+    
+    Runs ZAP in Docker to perform active and passive scanning
+    against a target URL, then parses the results.
+    
+    Example:
+        >>> scanner = DynamicSecurityScanner()
+        >>> findings = await scanner.run_baseline_scan("http://localhost:8000")
+    """
+    
+    ZAP_DOCKER_IMAGE = "ghcr.io/zaproxy/zaproxy:stable"
+    
+    def __init__(self, zap_api_key: Optional[str] = None) -> None:
+        self._api_key = zap_api_key or "aurora-dev-zap-key"
+    
+    async def run_baseline_scan(
+        self,
+        target_url: str,
+        timeout_minutes: int = 10,
+    ) -> list[DASTFinding]:
+        """Run ZAP baseline scan against a target.
+        
+        Args:
+            target_url: URL to scan.
+            timeout_minutes: Max scan duration.
+            
+        Returns:
+            List of security findings.
+        """
+        findings: list[DASTFinding] = []
+        
+        try:
+            cmd = [
+                "docker", "run", "--rm",
+                "-t", self.ZAP_DOCKER_IMAGE,
+                "zap-baseline.py",
+                "-t", target_url,
+                "-J", "/dev/stdout",  # JSON output to stdout
+                "-I",  # Don't return error on findings
+            ]
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout_minutes * 60,
+            )
+            
+            if stdout:
+                try:
+                    report = json.loads(stdout.decode())
+                    for site in report.get("site", []):
+                        for alert in site.get("alerts", []):
+                            findings.append(DASTFinding(
+                                alert=alert.get("name", "Unknown"),
+                                risk=alert.get("riskdesc", "Unknown").split(" ")[0],
+                                confidence=alert.get("confidence", "Low"),
+                                url=target_url,
+                                description=alert.get("desc", ""),
+                                solution=alert.get("solution", ""),
+                                cwe_id=int(alert.get("cweid", 0)),
+                            ))
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse ZAP output as JSON")
+            
+        except asyncio.TimeoutError:
+            logger.error(f"ZAP scan timed out after {timeout_minutes} minutes")
+        except FileNotFoundError:
+            logger.warning("Docker not available for DAST scanning")
+        except Exception as e:
+            logger.error(f"DAST scan failed: {e}")
+        
+        return findings
+    
+    async def run_api_scan(
+        self,
+        openapi_url: str,
+        target_url: str,
+    ) -> list[DASTFinding]:
+        """Run ZAP API scan using OpenAPI spec.
+        
+        Args:
+            openapi_url: URL or path to OpenAPI spec.
+            target_url: Target API base URL.
+            
+        Returns:
+            List of security findings.
+        """
+        findings: list[DASTFinding] = []
+        
+        try:
+            cmd = [
+                "docker", "run", "--rm",
+                "-t", self.ZAP_DOCKER_IMAGE,
+                "zap-api-scan.py",
+                "-t", openapi_url,
+                "-f", "openapi",
+                "-J", "/dev/stdout",
+                "-I",
+            ]
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            
+            stdout, _ = await process.communicate()
+            
+            if stdout:
+                try:
+                    report = json.loads(stdout.decode())
+                    for site in report.get("site", []):
+                        for alert in site.get("alerts", []):
+                            findings.append(DASTFinding(
+                                alert=alert.get("name", "Unknown"),
+                                risk=alert.get("riskdesc", "Unknown").split(" ")[0],
+                                confidence=alert.get("confidence", "Low"),
+                                url=target_url,
+                                description=alert.get("desc", ""),
+                                solution=alert.get("solution", ""),
+                                cwe_id=int(alert.get("cweid", 0)),
+                            ))
+                except json.JSONDecodeError:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"API scan failed: {e}")
+        
+        return findings
+
+
+# ---------------------------------------------------------------------------
+# Self-healing Test Runner (Gap B3)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SelectorRepair:
+    """A repaired test selector."""
+    original_selector: str
+    repaired_selector: str
+    confidence: float
+    repair_method: str  # "accessibility", "data-testid", "css-fallback"
+
+
+class SelfHealingTestRunner:
+    """Self-healing Playwright test runner.
+    
+    When tests fail due to selector changes, this runner:
+    1. Parses the failure to identify the broken selector
+    2. Queries the accessibility tree for alternative selectors
+    3. Uses LLM to suggest repaired selectors
+    4. Re-runs the test with the repaired selector
+    
+    Example:
+        >>> runner = SelfHealingTestRunner()
+        >>> result = await runner.run_with_healing("tests/e2e/login.spec.ts")
+    """
+    
+    MAX_REPAIR_ATTEMPTS = 3
+    
+    def __init__(self, llm_agent: Optional[BaseAgent] = None) -> None:
+        self._agent = llm_agent
+        self._repair_history: list[SelectorRepair] = []
+    
+    async def run_with_healing(
+        self,
+        test_file: str,
+        max_retries: int = 3,
+    ) -> dict[str, Any]:
+        """Run a Playwright test with self-healing selectors.
+        
+        Args:
+            test_file: Path to the test file.
+            max_retries: Max repair attempts.
+            
+        Returns:
+            Test result with any repairs applied.
+        """
+        attempt = 0
+        repairs: list[dict[str, Any]] = []
+        
+        while attempt < max_retries:
+            result = await self._run_playwright(test_file)
+            
+            if result["exit_code"] == 0:
+                return {
+                    "success": True,
+                    "attempts": attempt + 1,
+                    "repairs": repairs,
+                    "output": result["stdout"],
+                }
+            
+            # Parse selector failure
+            broken_selector = self._parse_selector_error(result["stderr"])
+            if not broken_selector:
+                break
+            
+            # Attempt repair
+            repair = await self._repair_selector(
+                broken_selector,
+                result.get("accessibility_tree", ""),
+            )
+            
+            if repair:
+                repairs.append(repair.original_selector)
+                self._repair_history.append(repair)
+                await self._apply_repair(test_file, repair)
+                attempt += 1
+            else:
+                break
+        
+        return {
+            "success": False,
+            "attempts": attempt + 1,
+            "repairs": repairs,
+            "error": "Could not self-heal test failures",
+        }
+    
+    async def _run_playwright(self, test_file: str) -> dict[str, Any]:
+        """Execute a Playwright test and capture output."""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "npx", "playwright", "test", test_file,
+                "--reporter=json",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            
+            return {
+                "exit_code": process.returncode,
+                "stdout": stdout.decode() if stdout else "",
+                "stderr": stderr.decode() if stderr else "",
+            }
+        except Exception as e:
+            return {"exit_code": 1, "stdout": "", "stderr": str(e)}
+    
+    def _parse_selector_error(self, stderr: str) -> Optional[str]:
+        """Extract the broken selector from Playwright error output."""
+        import re
+        
+        patterns = [
+            r'locator\.(?:click|fill|check)\("([^"]+)"\)',
+            r'page\.locator\("([^"]+)"\)',
+            r'getByRole\("([^"]+)"',
+            r'getByTestId\("([^"]+)"',
+            r'Locator: (.+?)(?:\n|$)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, stderr)
+            if match:
+                return match.group(1)
+        
+        return None
+    
+    async def _repair_selector(
+        self,
+        broken_selector: str,
+        accessibility_tree: str,
+    ) -> Optional[SelectorRepair]:
+        """Use LLM to suggest a repaired selector."""
+        if not self._agent:
+            return self._fallback_repair(broken_selector)
+        
+        prompt = f"""A Playwright test failed because this selector no longer matches:
+Broken selector: {broken_selector}
+
+Accessibility tree of the page:
+{accessibility_tree[:3000]}
+
+Suggest a repaired selector that targets the same element. Prefer:
+1. getByRole with accessible name
+2. data-testid attributes
+3. CSS selectors as last resort
+
+Respond with ONLY the new selector string, nothing else."""
+        
+        response = self._agent._call_api(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.1,
+        )
+        
+        if response.success and response.content.strip():
+            return SelectorRepair(
+                original_selector=broken_selector,
+                repaired_selector=response.content.strip().strip('"\''),
+                confidence=0.8,
+                repair_method="accessibility",
+            )
+        
+        return None
+    
+    def _fallback_repair(self, broken_selector: str) -> Optional[SelectorRepair]:
+        """Simple heuristic repair without LLM."""
+        # Try converting class-based selector to data-testid
+        if broken_selector.startswith("."):
+            class_name = broken_selector.lstrip(".")
+            return SelectorRepair(
+                original_selector=broken_selector,
+                repaired_selector=f'[data-testid="{class_name}"]',
+                confidence=0.4,
+                repair_method="data-testid",
+            )
+        return None
+    
+    async def _apply_repair(
+        self,
+        test_file: str,
+        repair: SelectorRepair,
+    ) -> None:
+        """Apply a selector repair to the test file."""
+        try:
+            with open(test_file, "r") as f:
+                content = f.read()
+            
+            content = content.replace(
+                repair.original_selector,
+                repair.repaired_selector,
+            )
+            
+            with open(test_file, "w") as f:
+                f.write(content)
+                
+            logger.info(
+                f"Applied selector repair: "
+                f"'{repair.original_selector}' -> '{repair.repaired_selector}'"
+            )
+        except Exception as e:
+            logger.error(f"Failed to apply repair: {e}")
+    
+    def get_repair_history(self) -> list[dict[str, Any]]:
+        """Get history of all selector repairs."""
+        return [
+            {
+                "original": r.original_selector,
+                "repaired": r.repaired_selector,
+                "confidence": r.confidence,
+                "method": r.repair_method,
+            }
+            for r in self._repair_history
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Agent Prompts
+# ---------------------------------------------------------------------------
 
 TEST_ENGINEER_SYSTEM_PROMPT = """You are the Test Engineer Agent of AURORA-DEV.
 
@@ -57,6 +439,7 @@ Your responsibilities:
 6. Input validation analysis
 7. SQL injection detection
 8. XSS vulnerability assessment
+9. Dynamic Application Security Testing (DAST) via OWASP ZAP
 
 Security Checklist:
 - Input validation and sanitization
@@ -122,6 +505,7 @@ class TestEngineerAgent(BaseAgent):
             project_id=project_id,
             session_id=session_id,
         )
+        self._self_healing_runner = SelfHealingTestRunner(llm_agent=self)
     
     @property
     def role(self) -> AgentRole:
@@ -248,6 +632,28 @@ Include:
             "success": response.success,
         }
     
+    async def run_self_healing_tests(
+        self,
+        test_file: str,
+        max_retries: int = 3,
+    ) -> dict[str, Any]:
+        """Run E2E tests with self-healing selector repair.
+        
+        When a Playwright test fails due to a changed selector,
+        the runner will attempt to repair it using accessibility
+        tree context and LLM suggestions.
+        
+        Args:
+            test_file: Path to the Playwright test file.
+            max_retries: Maximum repair attempts.
+            
+        Returns:
+            Test result including any repairs made.
+        """
+        return await self._self_healing_runner.run_with_healing(
+            test_file, max_retries=max_retries,
+        )
+    
     def execute(self, task: dict[str, Any]) -> AgentResponse:
         """Execute a testing task."""
         operation = task.get("operation", "unit")
@@ -268,6 +674,14 @@ Include:
                 task.get("user_journey", ""),
                 task.get("pages", []),
             )
+        elif operation == "self_healing":
+            import asyncio
+            result = asyncio.get_event_loop().run_until_complete(
+                self.run_self_healing_tests(
+                    task.get("test_file", ""),
+                    task.get("max_retries", 3),
+                )
+            )
         else:
             result = {"error": f"Unknown operation: {operation}"}
         
@@ -281,7 +695,10 @@ Include:
 
 
 class SecurityAuditorAgent(BaseAgent):
-    """Security Auditor Agent for vulnerability assessment."""
+    """Security Auditor Agent for vulnerability assessment.
+    
+    Provides both static (SAST) and dynamic (DAST) security testing.
+    """
     
     def __init__(
         self,
@@ -294,6 +711,7 @@ class SecurityAuditorAgent(BaseAgent):
             project_id=project_id,
             session_id=session_id,
         )
+        self._dast_scanner = DynamicSecurityScanner()
     
     @property
     def role(self) -> AgentRole:
@@ -309,7 +727,7 @@ class SecurityAuditorAgent(BaseAgent):
         language: str = "python",
         context: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Audit code for security vulnerabilities."""
+        """Audit code for security vulnerabilities (SAST)."""
         self._set_status(AgentStatus.WORKING)
         
         prompt = f"""Perform security audit on this {language} code:
@@ -349,6 +767,46 @@ For each finding, provide:
         return {
             "audit": response.content if response.success else response.error,
             "success": response.success,
+        }
+    
+    async def run_dast(
+        self,
+        target_url: str,
+        scan_type: str = "baseline",
+        openapi_url: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Run Dynamic Application Security Testing (DAST).
+        
+        Uses OWASP ZAP to perform runtime security testing against
+        a live application endpoint.
+        
+        Args:
+            target_url: URL of the application to scan.
+            scan_type: Type of scan - "baseline" or "api".
+            openapi_url: OpenAPI spec URL (required for api scan).
+            
+        Returns:
+            DAST findings with severity and remediation guidance.
+        """
+        self._set_status(AgentStatus.WORKING)
+        
+        if scan_type == "api" and openapi_url:
+            findings = await self._dast_scanner.run_api_scan(
+                openapi_url=openapi_url,
+                target_url=target_url,
+            )
+        else:
+            findings = await self._dast_scanner.run_baseline_scan(target_url)
+        
+        self._set_status(AgentStatus.IDLE)
+        
+        return {
+            "scan_type": scan_type,
+            "target": target_url,
+            "findings": [f.to_dict() for f in findings],
+            "findings_count": len(findings),
+            "critical_count": sum(1 for f in findings if f.risk == "High"),
+            "success": True,
         }
     
     def check_dependencies(
@@ -407,6 +865,15 @@ Provide:
             result = self.check_dependencies(
                 task.get("requirements", ""),
                 task.get("package_manager", "pip"),
+            )
+        elif operation == "dast":
+            import asyncio
+            result = asyncio.get_event_loop().run_until_complete(
+                self.run_dast(
+                    task.get("target_url", "http://localhost:8000"),
+                    task.get("scan_type", "baseline"),
+                    task.get("openapi_url"),
+                )
             )
         else:
             result = {"error": f"Unknown operation: {operation}"}
@@ -551,3 +1018,4 @@ Provide:
             stop_reason="end_turn",
             execution_time_ms=0,
         )
+

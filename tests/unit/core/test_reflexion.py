@@ -252,3 +252,130 @@ class TestReflexionEngine:
         reflections = await engine.get_reflections("task-1")
         assert len(reflections) == 1
         assert reflections[0].reflection_id == "ref-1"
+    
+    @pytest.mark.asyncio
+    async def test_store_reflection_with_redis(self) -> None:
+        """Test storing a reflection persists to Redis."""
+        mock_redis = Mock()
+        mock_redis.set = Mock()
+        mock_redis.sadd = Mock()
+        mock_redis.ping = Mock()
+        
+        engine = ReflexionEngine(
+            project_id="test-project",
+            redis_client=mock_redis,
+        )
+        
+        reflection = Reflection(
+            reflection_id="ref-redis-1",
+            task_id="task-2",
+            agent_id="agent-1",
+            attempt_number=1,
+            trigger=ReflexionTrigger.TEST_FAILURE,
+            timestamp=datetime.now(),
+            root_cause=RootCause(technical="Error", reasoning="Reason"),
+            incorrect_assumptions=[],
+            improved_strategy=ImprovedStrategy(
+                approach="Fix", implementation_steps=[], validation_plan=""
+            ),
+            lessons_learned=[],
+            task_description="",
+            approach_taken="",
+            code_produced=None,
+            test_results=None,
+            errors=None,
+            performance_metrics=None,
+        )
+        
+        await engine.store_reflection(reflection)
+        
+        # Verify Redis was called
+        mock_redis.set.assert_called_once()
+        mock_redis.sadd.assert_called_once()
+        
+        # Verify key format
+        set_call_args = mock_redis.set.call_args
+        key = set_call_args[0][0]
+        assert "reflexion:test-project:task-2:ref-redis-1" == key
+    
+    @pytest.mark.asyncio
+    async def test_get_reflections_from_redis_on_cache_miss(self) -> None:
+        """Test loading reflections from Redis when not in memory."""
+        import json
+        
+        mock_redis = Mock()
+        mock_redis.ping = Mock()
+        
+        stored_reflection = {
+            "reflection_id": "ref-loaded",
+            "task_id": "task-3",
+            "agent_id": "agent-1",
+            "attempt_number": 1,
+            "trigger": "test_failure",
+            "timestamp": datetime.now().isoformat(),
+            "root_cause": {"technical": "Bug", "reasoning": "Logic"},
+            "incorrect_assumptions": [],
+            "improved_strategy": {
+                "approach": "Patch",
+                "implementation_steps": [],
+                "validation_plan": "",
+            },
+            "lessons_learned": [],
+        }
+        
+        mock_redis.smembers = Mock(return_value={"ref-loaded"})
+        mock_redis.get = Mock(return_value=json.dumps(stored_reflection))
+        
+        engine = ReflexionEngine(
+            project_id="test-project",
+            redis_client=mock_redis,
+        )
+        
+        # Cache miss should load from Redis
+        reflections = await engine.get_reflections("task-3")
+        
+        assert len(reflections) == 1
+        assert reflections[0].reflection_id == "ref-loaded"
+        mock_redis.smembers.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_store_reflection_redis_failure_graceful(self) -> None:
+        """Test that Redis failure doesn't break in-memory storage."""
+        mock_redis = Mock()
+        mock_redis.ping = Mock()
+        mock_redis.set = Mock(side_effect=Exception("Redis down"))
+        mock_redis.sadd = Mock(side_effect=Exception("Redis down"))
+        
+        engine = ReflexionEngine(
+            project_id="test-project",
+            redis_client=mock_redis,
+        )
+        
+        reflection = Reflection(
+            reflection_id="ref-fallback",
+            task_id="task-4",
+            agent_id="agent-1",
+            attempt_number=1,
+            trigger=ReflexionTrigger.API_ERROR,
+            timestamp=datetime.now(),
+            root_cause=RootCause(technical="Error", reasoning="Reason"),
+            incorrect_assumptions=[],
+            improved_strategy=ImprovedStrategy(
+                approach="Retry", implementation_steps=[], validation_plan=""
+            ),
+            lessons_learned=[],
+            task_description="",
+            approach_taken="",
+            code_produced=None,
+            test_results=None,
+            errors=None,
+            performance_metrics=None,
+        )
+        
+        # Should not raise despite Redis failure
+        await engine.store_reflection(reflection)
+        
+        # In-memory should still work
+        reflections = await engine.get_reflections("task-4")
+        assert len(reflections) == 1
+

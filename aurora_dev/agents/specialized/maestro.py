@@ -277,10 +277,11 @@ Output valid JSON with the task list.
         Assign a task to the best available agent using weighted scoring.
         
         Scoring weights:
-        - Specialization match: 40%
-        - Workload balance: 30%
+        - Specialization match: 35%
+        - Workload balance: 25%
         - Success rate: 20%
         - Recency fairness: 10%
+        - Round-robin rotation: 10%
         
         Args:
             task: The task to assign.
@@ -323,8 +324,17 @@ Output valid JSON with the task list.
                 "tasks_assigned": 0,
                 "tasks_completed": 0,
                 "tasks_failed": 0,
+                "cycle_assigned": 0,
             }
         self._agent_metrics[agent_id]["tasks_assigned"] += 1
+        self._agent_metrics[agent_id]["cycle_assigned"] = (
+            self._agent_metrics[agent_id].get("cycle_assigned", 0) + 1
+        )
+        
+        # Advance round-robin index (B4)
+        if not hasattr(self, "_round_robin_index"):
+            self._round_robin_index = 0
+        self._round_robin_index += 1
         
         # Send task assignment message
         broker = get_broker()
@@ -362,6 +372,9 @@ Output valid JSON with the task list.
     def _score_agent(self, agent: Any, task: TaskDefinition, target_role: AgentRole) -> float:
         """Calculate weighted score for an agent-task pair.
         
+        Uses round-robin rotation to ensure fair distribution
+        across agents of the same role.
+        
         Args:
             agent: Candidate agent.
             task: Task to assign.
@@ -370,11 +383,12 @@ Output valid JSON with the task list.
         Returns:
             Composite score between 0 and 1.
         """
-        # Weight constants
-        W_SPECIALIZATION = 0.40
-        W_WORKLOAD = 0.30
+        # Weight constants (B4: added rotation weight)
+        W_SPECIALIZATION = 0.35
+        W_WORKLOAD = 0.25
         W_SUCCESS = 0.20
         W_RECENCY = 0.10
+        W_ROTATION = 0.10
         
         # 1. Specialization match (0 or 1)
         specialization_score = 1.0 if agent.role == target_role else 0.3
@@ -383,16 +397,23 @@ Output valid JSON with the task list.
         metrics = self._agent_metrics.get(agent.agent_id, {})
         active_tasks = metrics.get("tasks_assigned", 0) - metrics.get("tasks_completed", 0) - metrics.get("tasks_failed", 0)
         active_tasks = max(0, active_tasks)
-        workload_score = 1.0 / (1.0 + active_tasks)  # Fewer tasks = higher score
+        
+        # Per-cycle cap enforcement (B4)
+        max_per_cycle = getattr(self, "_max_tasks_per_cycle", 5)
+        cycle_assigned = metrics.get("cycle_assigned", 0)
+        if cycle_assigned >= max_per_cycle:
+            return 0.0
+        
+        workload_score = 1.0 / (1.0 + active_tasks)
         
         # 3. Success rate
         total_completed = metrics.get("tasks_completed", 0) + metrics.get("tasks_failed", 0)
         if total_completed > 0:
             success_score = metrics.get("tasks_completed", 0) / total_completed
         else:
-            success_score = 0.5  # Neutral for new agents
+            success_score = 0.5
         
-        # 4. Recency fairness (agents assigned fewer total tasks get a boost)
+        # 4. Recency fairness
         total_assigned = metrics.get("tasks_assigned", 0)
         max_assigned = max(
             (m.get("tasks_assigned", 0) for m in self._agent_metrics.values()),
@@ -400,12 +421,27 @@ Output valid JSON with the task list.
         )
         recency_score = 1.0 - (total_assigned / max(max_assigned, 1))
         
+        # 5. Round-robin rotation bonus (B4)
+        rr_index = getattr(self, "_round_robin_index", 0)
+        registry = get_registry()
+        agents_for_role = registry.get_available(target_role)
+        if agents_for_role:
+            expected_idx = rr_index % len(agents_for_role)
+            try:
+                agent_idx = [a.agent_id for a in agents_for_role].index(agent.agent_id)
+                rotation_score = 1.0 if agent_idx == expected_idx else 0.3
+            except ValueError:
+                rotation_score = 0.5
+        else:
+            rotation_score = 0.5
+        
         # Composite score
         score = (
             W_SPECIALIZATION * specialization_score
             + W_WORKLOAD * workload_score
             + W_SUCCESS * success_score
             + W_RECENCY * recency_score
+            + W_ROTATION * rotation_score
         )
         
         return score
@@ -479,6 +515,14 @@ Output valid JSON with the task list.
             if not result.success:
                 self._failed_tasks[task_id] = result.error or "Unknown error"
             
+            # Update metrics for scoring
+            agent_id = self._assigned_agents.get(task_id)
+            if agent_id and agent_id in self._agent_metrics:
+                if result.success:
+                    self._agent_metrics[agent_id]["tasks_completed"] += 1
+                else:
+                    self._agent_metrics[agent_id]["tasks_failed"] += 1
+            
             self._logger.info(
                 f"Task completed",
                 extra={
@@ -486,6 +530,58 @@ Output valid JSON with the task list.
                     "success": result.success,
                 },
             )
+    
+    async def _coordinate_merge(
+        self,
+        source_branch: str,
+        target_branch: str = "main",
+        repo_path: str = ".",
+    ) -> dict[str, Any]:
+        """
+        Coordinate merging an agent's work branch back to main.
+        
+        Uses MergeConflictResolver to handle conflicts automatically
+        when multiple agents work on overlapping files.
+        
+        Args:
+            source_branch: Branch to merge from.
+            target_branch: Branch to merge into.
+            repo_path: Path to the Git repository.
+            
+        Returns:
+            Merge result with conflict resolution status.
+        """
+        try:
+            from aurora_dev.tools.merge_resolver import MergeConflictResolver
+            
+            resolver = MergeConflictResolver(repo_path=repo_path)
+            result = await resolver.merge_worktree(
+                source_branch=source_branch,
+                target_branch=target_branch,
+            )
+            
+            if result.conflicts:
+                resolved = 0
+                for conflict_file in result.conflicts:
+                    success = await resolver.auto_resolve(conflict_file)
+                    if success:
+                        resolved += 1
+                
+                self._logger.info(
+                    f"Merge coordination: {resolved}/{len(result.conflicts)} "
+                    f"conflicts auto-resolved",
+                )
+            
+            return {
+                "success": result.success,
+                "conflicts_found": len(result.conflicts),
+                "source": source_branch,
+                "target": target_branch,
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Merge coordination failed: {e}")
+            return {"success": False, "error": str(e)}
     
     def get_project_status(self) -> dict[str, Any]:
         """
