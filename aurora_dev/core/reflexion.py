@@ -315,6 +315,7 @@ class ReflexionEngine:
         self,
         project_id: Optional[str] = None,
         max_attempts: int = 5,
+        redis_client: Optional[Any] = None,
     ):
         """
         Initialize the reflexion engine.
@@ -322,12 +323,34 @@ class ReflexionEngine:
         Args:
             project_id: Project identifier.
             max_attempts: Maximum retry attempts.
+            redis_client: Optional Redis client for persistence.
         """
         self.project_id = project_id
         self.max_attempts = max_attempts
-        self._reflections: dict[str, list[Reflection]] = {}
+        self._reflections: dict[str, list[Reflection]] = {}  # In-memory cache
         self._pattern_library: list[dict[str, Any]] = []
         self._logger = get_logger(__name__, project_id=project_id)
+        self._redis = redis_client
+        
+        # Try to initialize Redis if not provided
+        if self._redis is None:
+            try:
+                import redis
+                from aurora_dev.core.config import get_settings
+                settings = get_settings()
+                self._redis = redis.Redis.from_url(
+                    settings.redis.url,
+                    decode_responses=True,
+                    socket_timeout=settings.redis.socket_timeout,
+                )
+                self._redis.ping()
+                self._logger.info("Reflexion engine connected to Redis")
+            except Exception as e:
+                self._logger.warning(
+                    f"Redis not available for reflexion persistence: {e}. "
+                    "Reflections will be stored in-memory only."
+                )
+                self._redis = None
     
     async def generate_reflection(
         self,
@@ -425,28 +448,53 @@ class ReflexionEngine:
     
     async def store_reflection(self, reflection: Reflection) -> None:
         """
-        Store reflection in episodic memory.
+        Store reflection in episodic memory and persist to Redis.
+        
+        Maintains both an in-memory cache for fast access and
+        Redis persistence for survival across restarts.
         
         Args:
             reflection: The reflection to store.
         """
         task_id = reflection.task_id
         
+        # Store in memory cache
         if task_id not in self._reflections:
             self._reflections[task_id] = []
         
         self._reflections[task_id].append(reflection)
         
+        # Persist to Redis
+        if self._redis is not None:
+            try:
+                redis_key = (
+                    f"reflexion:{self.project_id or 'default'}"
+                    f":{task_id}:{reflection.reflection_id}"
+                )
+                self._redis.set(
+                    redis_key,
+                    json.dumps(reflection.to_dict()),
+                )
+                # Add to task's reflection set for lookup
+                set_key = f"reflexion:tasks:{self.project_id or 'default'}:{task_id}"
+                self._redis.sadd(set_key, reflection.reflection_id)
+                
+                self._logger.info(
+                    f"Persisted reflection {reflection.reflection_id} to Redis",
+                )
+            except Exception as e:
+                self._logger.warning(
+                    f"Failed to persist reflection to Redis: {e}"
+                )
+        
         self._logger.info(
             f"Stored reflection {reflection.reflection_id} for task {task_id}",
             extra={"attempt": reflection.attempt_number},
         )
-        
-        # TODO: Persist to Mem0 / database
     
     async def get_reflections(self, task_id: str) -> list[Reflection]:
         """
-        Get all reflections for a task.
+        Get all reflections for a task, loading from Redis if not cached.
         
         Args:
             task_id: The task identifier.
@@ -454,7 +502,42 @@ class ReflexionEngine:
         Returns:
             List of reflections for the task.
         """
-        return self._reflections.get(task_id, [])
+        # Check in-memory cache first
+        if task_id in self._reflections:
+            return self._reflections[task_id]
+        
+        # Try loading from Redis
+        if self._redis is not None:
+            try:
+                set_key = f"reflexion:tasks:{self.project_id or 'default'}:{task_id}"
+                reflection_ids = self._redis.smembers(set_key)
+                
+                reflections = []
+                for ref_id in reflection_ids:
+                    redis_key = (
+                        f"reflexion:{self.project_id or 'default'}"
+                        f":{task_id}:{ref_id}"
+                    )
+                    data = self._redis.get(redis_key)
+                    if data:
+                        reflection = Reflection.from_dict(json.loads(data))
+                        reflections.append(reflection)
+                
+                # Sort by attempt number
+                reflections.sort(key=lambda r: r.attempt_number)
+                
+                # Cache for future access
+                if reflections:
+                    self._reflections[task_id] = reflections
+                
+                return reflections
+                
+            except Exception as e:
+                self._logger.warning(
+                    f"Failed to load reflections from Redis: {e}"
+                )
+        
+        return []
     
     def get_retry_context(
         self,

@@ -144,6 +144,40 @@ class Mem0Settings(BaseSettings):
     )
 
 
+class OpenAISettings(BaseSettings):
+    """OpenAI API configuration for embeddings."""
+
+    model_config = SettingsConfigDict(env_prefix="OPENAI_")
+
+    api_key: str = Field(
+        default="",
+        description="OpenAI API key for embeddings",
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-large",
+        description="OpenAI embedding model name",
+    )
+    embedding_dimension: int = Field(
+        default=1536,
+        description="Embedding output dimension",
+    )
+
+
+class GitHubSettings(BaseSettings):
+    """GitHub API configuration for research."""
+
+    model_config = SettingsConfigDict(env_prefix="GITHUB_")
+
+    token: str = Field(
+        default="",
+        description="GitHub Personal Access Token",
+    )
+    api_base_url: str = Field(
+        default="https://api.github.com",
+        description="GitHub API base URL",
+    )
+
+
 class AgentSettings(BaseSettings):
     """Agent-specific configuration."""
 
@@ -191,6 +225,8 @@ class Settings(BaseSettings):
     agent: AgentSettings = Field(default_factory=AgentSettings)
     pinecone: PineconeSettings = Field(default_factory=PineconeSettings)
     mem0: Mem0Settings = Field(default_factory=Mem0Settings)
+    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    github: GitHubSettings = Field(default_factory=GitHubSettings)
 
     @property
     def is_development(self) -> bool:

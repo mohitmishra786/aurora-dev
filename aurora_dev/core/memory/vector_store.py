@@ -8,7 +8,10 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Optional
+
+import httpx
 
 try:
     from pinecone import Pinecone, ServerlessSpec
@@ -20,6 +23,11 @@ from aurora_dev.core.config import get_settings
 from aurora_dev.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# Module-level embedding cache to avoid redundant API calls
+_embedding_cache: dict[str, list[float]] = {}
+_EMBEDDING_CACHE_MAX_SIZE = 1000
 
 
 @dataclass
@@ -140,16 +148,86 @@ class VectorStore:
         return hashlib.sha256(content.encode()).hexdigest()[:16]
     
     async def _get_embedding(self, text: str) -> list[float]:
-        """Get embedding for text using the configured embedding model.
+        """Get embedding for text using OpenAI's embedding API.
         
-        For now, this uses a placeholder. In production, integrate with
-        an embedding model (OpenAI, Cohere, or local model).
+        Uses text-embedding-3-large model with caching to avoid
+        redundant API calls. Falls back to deterministic hash-based
+        embeddings if the API is unavailable.
         """
-        # TODO: Integrate with actual embedding model
-        # For now, use Pinecone's inference API or mock
-        # This is a placeholder that should be replaced
-        import random
-        return [random.uniform(-1, 1) for _ in range(self.settings.pinecone.dimension)]
+        global _embedding_cache
+        
+        # Check cache first
+        cache_key = hashlib.sha256(text.encode()).hexdigest()
+        if cache_key in _embedding_cache:
+            return _embedding_cache[cache_key]
+        
+        # Try OpenAI API
+        api_key = self.settings.openai.api_key
+        if not api_key:
+            logger.warning(
+                "OpenAI API key not configured, using hash-based fallback embeddings. "
+                "Set OPENAI_API_KEY for real semantic search."
+            )
+            return self._fallback_embedding(text)
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.settings.openai.embedding_model,
+                        "input": text,
+                        "dimensions": self.settings.openai.embedding_dimension,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                embedding = data["data"][0]["embedding"]
+                
+                # Cache the result
+                if len(_embedding_cache) >= _EMBEDDING_CACHE_MAX_SIZE:
+                    # Evict oldest entries (first 100)
+                    keys_to_remove = list(_embedding_cache.keys())[:100]
+                    for k in keys_to_remove:
+                        del _embedding_cache[k]
+                _embedding_cache[cache_key] = embedding
+                
+                return embedding
+                
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"OpenAI embedding API error: {e.response.status_code}",
+                detail=e.response.text[:200],
+            )
+            return self._fallback_embedding(text)
+        except Exception as e:
+            logger.error(f"Embedding generation failed: {e}")
+            return self._fallback_embedding(text)
+    
+    def _fallback_embedding(self, text: str) -> list[float]:
+        """Generate deterministic hash-based embedding as fallback.
+        
+        This produces consistent (not random) vectors based on content,
+        which provides basic deduplication but NOT semantic similarity.
+        """
+        import struct
+        dimension = self.settings.pinecone.dimension
+        # Use SHA-512 repeatedly to fill the dimension
+        result = []
+        seed = text.encode()
+        while len(result) < dimension:
+            seed = hashlib.sha512(seed).digest()
+            # Unpack 8 doubles from 64 bytes
+            floats = struct.unpack('8d', seed)
+            # Normalize to [-1, 1]
+            for f in floats:
+                if len(result) < dimension:
+                    result.append((f % 2.0) - 1.0)
+        return result[:dimension]
     
     async def store(
         self,

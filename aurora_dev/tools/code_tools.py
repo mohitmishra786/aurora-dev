@@ -686,3 +686,321 @@ class ESLintRunner(BaseTool):
                 error=str(e),
                 duration_ms=duration_ms,
             )
+
+
+class FileReader(BaseTool):
+    """
+    File reading tool for agents.
+    
+    Reads file contents with optional line range selection,
+    providing agents the ability to inspect source code.
+    
+    Config:
+        path: File path to read
+        start_line: Starting line number (1-indexed, optional)
+        end_line: Ending line number (inclusive, optional)
+        max_size_kb: Maximum file size to read in KB (default: 500)
+    """
+    
+    @property
+    def name(self) -> str:
+        return "read_file"
+    
+    @property
+    def description(self) -> str:
+        return "Read file contents with optional line range"
+    
+    def validate_config(self, config: dict[str, Any]) -> tuple[bool, Optional[str]]:
+        """Validate file read configuration."""
+        if "path" not in config:
+            return False, "Missing required 'path' field"
+        
+        path = config["path"]
+        if not os.path.exists(path):
+            return False, f"File does not exist: {path}"
+        
+        if not os.path.isfile(path):
+            return False, f"Path is not a file: {path}"
+        
+        max_size_kb = config.get("max_size_kb", 500)
+        file_size = os.path.getsize(path) / 1024
+        if file_size > max_size_kb:
+            return False, f"File too large ({file_size:.0f}KB > {max_size_kb}KB limit)"
+        
+        return True, None
+    
+    async def run(self, config: dict[str, Any]) -> ToolResult:
+        """Read file contents."""
+        path = config["path"]
+        start_line = config.get("start_line")
+        end_line = config.get("end_line")
+        
+        start_time = time.time()
+        
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            
+            total_lines = len(lines)
+            
+            # Apply line range
+            if start_line is not None or end_line is not None:
+                start = max(0, (start_line or 1) - 1)
+                end = min(total_lines, end_line or total_lines)
+                selected_lines = lines[start:end]
+                # Add line numbers
+                content = "".join(
+                    f"{i + start + 1}: {line}"
+                    for i, line in enumerate(selected_lines)
+                )
+            else:
+                content = "".join(lines)
+            
+            duration_ms = (time.time() - start_time) * 1000
+            
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.SUCCESS,
+                output={
+                    "content": content,
+                    "total_lines": total_lines,
+                    "file_path": path,
+                },
+                duration_ms=duration_ms,
+                metadata={"path": path},
+            )
+            
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self._logger.error(f"File read failed: {e}")
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.FAILED,
+                output=None,
+                error=str(e),
+                duration_ms=duration_ms,
+            )
+
+
+class GrepSearch(BaseTool):
+    """
+    Recursive grep search tool for agents.
+    
+    Searches for patterns in files using subprocess grep,
+    returning matches with file names and line numbers.
+    
+    Config:
+        pattern: Search pattern (string or regex)
+        path: Directory or file to search
+        regex: Treat pattern as regex (default: False)
+        case_insensitive: Case-insensitive search (default: False)
+        include: File glob pattern to include (optional)
+        max_results: Maximum results to return (default: 50)
+    """
+    
+    @property
+    def name(self) -> str:
+        return "grep"
+    
+    @property
+    def description(self) -> str:
+        return "Search for patterns in files recursively"
+    
+    def validate_config(self, config: dict[str, Any]) -> tuple[bool, Optional[str]]:
+        """Validate grep configuration."""
+        if "pattern" not in config:
+            return False, "Missing required 'pattern' field"
+        
+        if "path" not in config:
+            return False, "Missing required 'path' field"
+        
+        path = config["path"]
+        if not os.path.exists(path):
+            return False, f"Path does not exist: {path}"
+        
+        return True, None
+    
+    async def run(self, config: dict[str, Any]) -> ToolResult:
+        """Execute grep search."""
+        pattern = config["pattern"]
+        path = config["path"]
+        use_regex = config.get("regex", False)
+        case_insensitive = config.get("case_insensitive", False)
+        include = config.get("include")
+        max_results = config.get("max_results", 50)
+        
+        start_time = time.time()
+        
+        # Build grep command
+        cmd_parts = ["grep", "-rn"]
+        
+        if not use_regex:
+            cmd_parts.append("-F")  # Fixed string (literal)
+        
+        if case_insensitive:
+            cmd_parts.append("-i")
+        
+        if include:
+            cmd_parts.extend(["--include", include])
+        
+        cmd_parts.extend([pattern, path])
+        
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd_parts,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=30,
+            )
+            
+            duration_ms = (time.time() - start_time) * 1000
+            
+            stdout_str = stdout.decode("utf-8", errors="replace")
+            
+            # Parse results
+            matches = []
+            for line in stdout_str.strip().split("\n"):
+                if not line:
+                    continue
+                # Format: file:line_number:content
+                parts = line.split(":", 2)
+                if len(parts) >= 3:
+                    matches.append({
+                        "file": parts[0],
+                        "line": int(parts[1]) if parts[1].isdigit() else 0,
+                        "content": parts[2].strip(),
+                    })
+                
+                if len(matches) >= max_results:
+                    break
+            
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.SUCCESS,
+                output={
+                    "matches": matches,
+                    "total_matches": len(matches),
+                    "truncated": len(matches) >= max_results,
+                },
+                duration_ms=duration_ms,
+                metadata={"pattern": pattern, "path": path},
+            )
+            
+        except asyncio.TimeoutError:
+            duration_ms = (time.time() - start_time) * 1000
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.TIMEOUT,
+                output=None,
+                error="Grep search timed out after 30s",
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self._logger.error(f"Grep search failed: {e}")
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.FAILED,
+                output=None,
+                error=str(e),
+                duration_ms=duration_ms,
+            )
+
+
+class GlobSearch(BaseTool):
+    """
+    File listing tool using glob patterns.
+    
+    Lists files matching a glob pattern, returning
+    paths with size and modification time.
+    
+    Config:
+        pattern: Glob pattern (e.g., "**/*.py")
+        path: Base directory to search from
+        max_results: Maximum number of files (default: 100)
+    """
+    
+    @property
+    def name(self) -> str:
+        return "glob"
+    
+    @property
+    def description(self) -> str:
+        return "List files matching a glob pattern"
+    
+    def validate_config(self, config: dict[str, Any]) -> tuple[bool, Optional[str]]:
+        """Validate glob configuration."""
+        if "pattern" not in config:
+            return False, "Missing required 'pattern' field"
+        
+        if "path" not in config:
+            return False, "Missing required 'path' field"
+        
+        path = config["path"]
+        if not os.path.isdir(path):
+            return False, f"Directory does not exist: {path}"
+        
+        return True, None
+    
+    async def run(self, config: dict[str, Any]) -> ToolResult:
+        """Execute glob search."""
+        from pathlib import Path
+        from datetime import datetime
+        
+        pattern = config["pattern"]
+        base_path = config["path"]
+        max_results = config.get("max_results", 100)
+        
+        start_time = time.time()
+        
+        try:
+            base = Path(base_path)
+            matches = []
+            
+            for file_path in base.glob(pattern):
+                if len(matches) >= max_results:
+                    break
+                
+                try:
+                    stat = file_path.stat()
+                    matches.append({
+                        "path": str(file_path),
+                        "name": file_path.name,
+                        "size_bytes": stat.st_size,
+                        "modified": datetime.fromtimestamp(
+                            stat.st_mtime
+                        ).isoformat(),
+                        "is_dir": file_path.is_dir(),
+                    })
+                except OSError:
+                    continue
+            
+            duration_ms = (time.time() - start_time) * 1000
+            
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.SUCCESS,
+                output={
+                    "files": matches,
+                    "total_found": len(matches),
+                    "truncated": len(matches) >= max_results,
+                },
+                duration_ms=duration_ms,
+                metadata={"pattern": pattern, "path": base_path},
+            )
+            
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self._logger.error(f"Glob search failed: {e}")
+            return ToolResult(
+                tool_name=self.name,
+                status=ToolStatus.FAILED,
+                output=None,
+                error=str(e),
+                duration_ms=duration_ms,
+            )
+

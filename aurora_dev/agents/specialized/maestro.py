@@ -124,6 +124,7 @@ class MaestroAgent(BaseAgent):
         
         # Agent management
         self._assigned_agents: dict[str, str] = {}  # task_id -> agent_id
+        self._agent_metrics: dict[str, dict[str, int]] = {}  # agent_id -> metrics
         
         # Register with broker
         broker = get_broker()
@@ -273,7 +274,13 @@ Output valid JSON with the task list.
     
     def assign_task(self, task: TaskDefinition) -> Optional[str]:
         """
-        Assign a task to an appropriate agent.
+        Assign a task to the best available agent using weighted scoring.
+        
+        Scoring weights:
+        - Specialization match: 40%
+        - Workload balance: 30%
+        - Success rate: 20%
+        - Recency fairness: 10%
         
         Args:
             task: The task to assign.
@@ -296,8 +303,28 @@ Output valid JSON with the task list.
             )
             return None
         
-        # Select best agent (for now, just take first available)
-        agent = available[0]
+        # Score each agent
+        best_agent = None
+        best_score = -1.0
+        
+        for agent in available:
+            score = self._score_agent(agent, task, target_role)
+            if score > best_score:
+                best_score = score
+                best_agent = agent
+        
+        if best_agent is None:
+            best_agent = available[0]
+        
+        # Update metrics
+        agent_id = best_agent.agent_id
+        if agent_id not in self._agent_metrics:
+            self._agent_metrics[agent_id] = {
+                "tasks_assigned": 0,
+                "tasks_completed": 0,
+                "tasks_failed": 0,
+            }
+        self._agent_metrics[agent_id]["tasks_assigned"] += 1
         
         # Send task assignment message
         broker = get_broker()
@@ -305,7 +332,7 @@ Output valid JSON with the task list.
             type=MessageType.TASK_ASSIGN,
             sender_id=self._agent_id,
             sender_role=self.role,
-            recipient_id=agent.agent_id,
+            recipient_id=best_agent.agent_id,
             content={
                 "task": task.to_agent_dict(),
             },
@@ -315,21 +342,73 @@ Output valid JSON with the task list.
         delivered = broker.send(message)
         
         if delivered > 0:
-            self._assigned_agents[task.id] = agent.agent_id
-            task.assigned_agent_id = agent.agent_id
+            self._assigned_agents[task.id] = best_agent.agent_id
+            task.assigned_agent_id = best_agent.agent_id
             task.status = TaskStatus.ASSIGNED
             
             self._logger.info(
-                f"Task assigned to {agent.name}",
+                f"Task assigned to {best_agent.name} (score={best_score:.2f})",
                 extra={
                     "task_id": task.id,
-                    "agent_id": agent.agent_id,
-                    "role": agent.role.value,
+                    "agent_id": best_agent.agent_id,
+                    "role": best_agent.role.value,
+                    "score": best_score,
                 },
             )
-            return agent.agent_id
+            return best_agent.agent_id
         
         return None
+    
+    def _score_agent(self, agent: Any, task: TaskDefinition, target_role: AgentRole) -> float:
+        """Calculate weighted score for an agent-task pair.
+        
+        Args:
+            agent: Candidate agent.
+            task: Task to assign.
+            target_role: Target role for the task.
+            
+        Returns:
+            Composite score between 0 and 1.
+        """
+        # Weight constants
+        W_SPECIALIZATION = 0.40
+        W_WORKLOAD = 0.30
+        W_SUCCESS = 0.20
+        W_RECENCY = 0.10
+        
+        # 1. Specialization match (0 or 1)
+        specialization_score = 1.0 if agent.role == target_role else 0.3
+        
+        # 2. Workload balance (inverse of current task count)
+        metrics = self._agent_metrics.get(agent.agent_id, {})
+        active_tasks = metrics.get("tasks_assigned", 0) - metrics.get("tasks_completed", 0) - metrics.get("tasks_failed", 0)
+        active_tasks = max(0, active_tasks)
+        workload_score = 1.0 / (1.0 + active_tasks)  # Fewer tasks = higher score
+        
+        # 3. Success rate
+        total_completed = metrics.get("tasks_completed", 0) + metrics.get("tasks_failed", 0)
+        if total_completed > 0:
+            success_score = metrics.get("tasks_completed", 0) / total_completed
+        else:
+            success_score = 0.5  # Neutral for new agents
+        
+        # 4. Recency fairness (agents assigned fewer total tasks get a boost)
+        total_assigned = metrics.get("tasks_assigned", 0)
+        max_assigned = max(
+            (m.get("tasks_assigned", 0) for m in self._agent_metrics.values()),
+            default=1,
+        )
+        recency_score = 1.0 - (total_assigned / max(max_assigned, 1))
+        
+        # Composite score
+        score = (
+            W_SPECIALIZATION * specialization_score
+            + W_WORKLOAD * workload_score
+            + W_SUCCESS * success_score
+            + W_RECENCY * recency_score
+        )
+        
+        return score
     
     def _get_target_role(self, task: TaskDefinition) -> AgentRole:
         """Determine the target agent role for a task."""
