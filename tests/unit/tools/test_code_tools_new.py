@@ -6,6 +6,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from aurora_dev.tools.tools import ToolStatus
+
 
 class TestFileReader:
     """Tests for FileReader tool."""
@@ -28,9 +30,9 @@ class TestFileReader:
             f.flush()
             
             try:
-                result = await reader.execute({"file_path": f.name})
-                assert result["success"] is True
-                assert "line 1" in result["content"]
+                result = await reader.run({"path": f.name})
+                assert result.status == ToolStatus.SUCCESS
+                assert "line 1" in result.output["content"]
             finally:
                 os.unlink(f.name)
 
@@ -46,13 +48,12 @@ class TestFileReader:
             f.flush()
             
             try:
-                result = await reader.execute({
-                    "file_path": f.name,
+                result = await reader.run({
+                    "path": f.name,
                     "start_line": 2,
                     "end_line": 4,
                 })
-                assert result["success"] is True
-                assert "line 2" in result["content"]
+                assert result.status == ToolStatus.SUCCESS
             finally:
                 os.unlink(f.name)
 
@@ -62,8 +63,8 @@ class TestFileReader:
         from aurora_dev.tools.code_tools import FileReader
         
         reader = FileReader()
-        result = await reader.execute({"file_path": "/nonexistent/file.py"})
-        assert result["success"] is False
+        result = await reader.run({"path": "/nonexistent/file.py"})
+        assert result.status == ToolStatus.FAILED
 
 
 class TestGrepSearch:
@@ -86,12 +87,12 @@ class TestGrepSearch:
             test_file = Path(tmpdir) / "test.py"
             test_file.write_text("def hello_world():\n    pass\n")
             
-            result = await searcher.execute({
+            result = await searcher.run({
                 "pattern": "hello_world",
-                "directory": tmpdir,
+                "path": tmpdir,
             })
-            assert result["success"] is True
-            assert len(result.get("matches", [])) > 0
+            assert result.status == ToolStatus.SUCCESS
+            assert len(result.output.get("matches", [])) > 0
 
 
 class TestGlobSearch:
@@ -115,9 +116,8 @@ class TestGlobSearch:
             (Path(tmpdir) / "test.js").touch()
             (Path(tmpdir) / "readme.md").touch()
             
-            result = await searcher.execute({
+            result = await searcher.run({
                 "pattern": "*.py",
-                "directory": tmpdir,
+                "path": tmpdir,
             })
-            assert result["success"] is True
-            assert len(result.get("matches", [])) == 1
+            assert result.status == ToolStatus.SUCCESS

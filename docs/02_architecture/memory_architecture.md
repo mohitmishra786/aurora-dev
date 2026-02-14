@@ -2,7 +2,7 @@
 
 Three-tier memory system enabling persistent learning and context management.
 
-**Last Updated:** February 8, 2026  
+**Last Updated:** February 14, 2026  
 **Audience:** Developers, Architects
 
 > **Before Reading This**
@@ -254,6 +254,32 @@ def calculate_relevance(
     
     return base + recency + popularity + project
 ```
+
+### Cross-Encoder Re-ranking
+
+The `VectorStore.search()` method applies a two-stage retrieval pipeline:
+
+1. **Stage 1 — Fast retrieval**: Pinecone/FAISS returns `top_k * 3` candidates using vector similarity
+2. **Stage 2 — Precise re-ranking**: `CrossEncoderReranker` scores each candidate against the query using a cross-encoder model (`cross-encoder/ms-marco-MiniLM-L-6-v2`), returning the final `top_k`
+
+Re-ranking is conditional — when `sentence-transformers` is not installed, results pass through unranked.
+
+### Semantic Fallback Embeddings
+
+When the OpenAI API key is unavailable, the `VectorStore` uses a three-tier fallback chain:
+
+| Priority | Method | Quality | Dependency |
+|----------|--------|---------|------------|
+| 1 | OpenAI `text-embedding-3-large` | Production-grade | `OPENAI_API_KEY` |
+| 2 | Local `all-MiniLM-L6-v2` | Good semantic similarity | `sentence-transformers` |
+| 3 | SHA-512 hash-based | Deduplication only | None |
+
+### FAISS Local Store
+
+For offline/local development, `FAISSLocalStore` (`aurora_dev/core/faiss_store.py`) provides a lightweight alternative to Pinecone with:
+- L2-normalized cosine similarity search
+- On-disk persistence with `numpy` serialization
+- Automatic fallback to brute-force when `faiss-cpu` is not installed
 
 ## Configuration
 

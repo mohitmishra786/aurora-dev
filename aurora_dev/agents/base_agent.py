@@ -20,6 +20,16 @@ from anthropic import Anthropic, APIError, RateLimitError, APIConnectionError
 
 from aurora_dev.core.config import get_settings
 from aurora_dev.core.logging import get_agent_logger
+from aurora_dev.core.budget_manager import BudgetManager
+from aurora_dev.core.context_window import ContextWindowValidator, estimate_messages_tokens
+
+# Shared budget manager singleton (Audit 2.1)
+_budget_manager = BudgetManager()
+
+
+def get_budget_manager() -> BudgetManager:
+    """Get the shared budget manager instance."""
+    return _budget_manager
 
 
 class AgentRole(Enum):
@@ -309,6 +319,18 @@ class BaseAgent(ABC):
         Returns:
             AgentResponse with content and metadata.
         """
+        # Budget check (Audit 2.1)
+        if not _budget_manager.can_proceed(self._agent_id):
+            self._logger.warning("Budget exceeded, blocking API call")
+            return AgentResponse(
+                content="",
+                token_usage=TokenUsage(),
+                model=self._model,
+                stop_reason="budget_exceeded",
+                execution_time_ms=0.0,
+                error="Agent budget exceeded. Cannot proceed.",
+            )
+        
         # Check cache first
         if use_cache and self._cache:
             cached = self._cache.get(messages, self.system_prompt, self._model)
@@ -350,6 +372,13 @@ class BaseAgent(ABC):
                 # Update tracking
                 self._total_usage.add(usage)
                 self._request_count += 1
+                
+                # Record budget usage (Audit 2.1)
+                _budget_manager.record_usage(
+                    self._agent_id,
+                    prompt=usage.input_tokens,
+                    completion=usage.output_tokens,
+                )
                 
                 execution_time_ms = (time.time() - start_time) * 1000
                 

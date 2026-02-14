@@ -2,7 +2,7 @@
 
 The art of remembering what matters.
 
-**Last Updated:** February 8, 2026
+**Last Updated:** February 14, 2026
 **Audience:** AI Engineers, Architects
 
 > **Before Reading This**
@@ -59,6 +59,16 @@ We don't always need the full file content.
 ## The "Lost in the Middle" Problem
 
 LLMs tend to pay more attention to the beginning and end of the prompt. We place critical instructions and the target file at the end, and reference material in the middle.
+
+## Context Window Validation
+
+The `ContextWindowValidator` module (`aurora_dev/core/context_window.py`) provides runtime guards:
+
+- **`estimate_tokens(text)`**: Estimates token count using a 4-char-per-token heuristic, with model-specific adjustments
+- **`MODEL_CONTEXT_LIMITS`**: Dictionary mapping model names to their maximum context sizes
+- **Smart truncation**: When content exceeds capacity, truncates from the middle (preserving start and end) to combat the "lost in the middle" problem
+
+Maestro's `_score_agent()` uses this module to reject agents whose context window can't fit the task (80% threshold), preventing mid-execution failures.
 
 ## Related Reading
 

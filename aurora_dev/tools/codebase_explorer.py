@@ -58,10 +58,21 @@ class CodebaseExplorer:
         "venv", ".tox", ".mypy_cache", "dist", "build",
     }
     
-    def __init__(self, repo_path: str) -> None:
+    def __init__(
+        self,
+        repo_path: str,
+        extensions: Optional[list[str]] = None,
+    ) -> None:
         self._repo_path = Path(repo_path)
         self._file_index: dict[str, list[str]] = {}
         self._insights_cache: dict[str, list[CodebaseInsight]] = {}
+        # Polyglot default extensions (Audit 2.3)
+        self._default_extensions = extensions or [
+            ".py", ".ts", ".js", ".tsx", ".jsx",
+            ".go", ".rs", ".java", ".kt",
+            ".yaml", ".yml", ".toml",
+            ".dockerfile", ".Dockerfile",
+        ]
     
     async def explore(
         self,
@@ -82,7 +93,7 @@ class CodebaseExplorer:
         if topic in self._insights_cache:
             return self._insights_cache[topic]
         
-        extensions = file_extensions or [".py", ".ts", ".js", ".tsx", ".jsx"]
+        extensions = file_extensions or self._default_extensions
         insights: list[CodebaseInsight] = []
         
         # 1. Find relevant files
@@ -111,13 +122,56 @@ class CodebaseExplorer:
         extensions: list[str],
         max_files: int,
     ) -> list[Path]:
-        """Find files relevant to the topic using grep."""
+        """Find files relevant to the topic.
+        
+        Uses git ls-files for language-agnostic discovery (Audit 2.3),
+        falling back to grep when not in a git repo.
+        """
         relevant: list[Path] = []
         
+        # Try git ls-files first for language-agnostic file listing
         try:
             process = await asyncio.create_subprocess_exec(
-                "grep", "-rl", "--include=*.py", "--include=*.ts",
-                "--include=*.js", topic, str(self._repo_path),
+                "git", "ls-files",
+                cwd=str(self._repo_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await process.communicate()
+            
+            if process.returncode == 0:
+                all_files = stdout.decode().strip().split("\n")
+                # Filter by extensions and search content for topic
+                candidates = [
+                    self._repo_path / f for f in all_files
+                    if f and any(f.endswith(ext) for ext in extensions)
+                ]
+                
+                # Search topic in candidate files
+                for fpath in candidates:
+                    if len(relevant) >= max_files:
+                        break
+                    try:
+                        content = fpath.read_text(errors="ignore")
+                        if topic.lower() in content.lower():
+                            relevant.append(fpath)
+                    except Exception:
+                        pass
+                
+                if relevant:
+                    return relevant
+        except Exception:
+            pass  # Not a git repo; fall through to grep
+        
+        # Fallback: grep
+        try:
+            include_args: list[str] = []
+            for ext in extensions:
+                include_args.extend([f"--include=*{ext}"])
+            
+            process = await asyncio.create_subprocess_exec(
+                "grep", "-rl", *include_args,
+                topic, str(self._repo_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -128,7 +182,7 @@ class CodebaseExplorer:
                     relevant.append(Path(line))
                     
         except Exception:
-            # Fallback: walk directory
+            # Last resort: walk directory
             count = 0
             for root, dirs, files in os.walk(self._repo_path):
                 dirs[:] = [d for d in dirs if d not in self.IGNORE_DIRS]

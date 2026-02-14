@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Any, TypedDict, Optional
 
 from aurora_dev.core.logging import get_logger
+from aurora_dev.core.agent_health_monitor import AgentHealthMonitor
 
 logger = get_logger(__name__)
 
@@ -77,7 +78,7 @@ class LangGraphOrchestrator:
         
         logger.info("LangGraph orchestrator initialized")
 
-    def _build_graph(self) -> StateGraph:
+    def _build_graph(self) -> "StateGraph":
         """Build the LangGraph state machine.
         
         Returns:
@@ -325,6 +326,21 @@ class LangGraphOrchestrator:
         
         logger.info(f"Starting LangGraph orchestration for project {project_id}")
         
+        # Start health monitor (Audit 2.2)
+        monitor = AgentHealthMonitor(
+            poll_interval_seconds=30,
+            stuck_threshold_seconds=900,  # 15 minutes
+        )
+        
+        def _on_stuck(agent_id: str):
+            logger.warning(
+                f"Agent {agent_id} detected as stuck during orchestration "
+                f"of project {project_id}"
+            )
+        
+        monitor.register_callback(_on_stuck)
+        await monitor.start()
+        
         try:
             final_state = await self._graph.ainvoke(initial_state)
             logger.info(
@@ -337,6 +353,8 @@ class LangGraphOrchestrator:
             initial_state["error"] = str(e)
             initial_state["current_phase"] = ProjectPhase.FAILED.value
             return initial_state
+        finally:
+            await monitor.stop()
 
     def get_graph_visualization(self) -> Optional[str]:
         """Get Mermaid diagram of the workflow graph.

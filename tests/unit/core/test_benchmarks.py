@@ -27,7 +27,7 @@ class TestRuntimeBenchmark:
         
         assert "llm_api" in benchmark._components
         metrics = benchmark._components["llm_api"]
-        assert metrics.total_calls == 3
+        assert metrics.success_count + metrics.error_count == 3
         assert metrics.error_count == 1
 
     def test_record_tokens(self, benchmark):
@@ -69,7 +69,7 @@ class TestRuntimeBenchmark:
         
         assert "components" in report
         assert "token_usage" in report
-        assert "test_results" in report
+        assert "tests" in report
         assert "uptime_seconds" in report
 
     def test_get_report_empty(self, benchmark):
@@ -77,7 +77,7 @@ class TestRuntimeBenchmark:
         report = benchmark.get_report()
         
         assert report["components"] == {}
-        assert report["token_usage"] == {}
+        assert report["token_usage"]["total"] == 0
         assert report["uptime_seconds"] >= 0
 
     def test_latency_percentiles(self, benchmark):
@@ -88,8 +88,10 @@ class TestRuntimeBenchmark:
         report = benchmark.get_report()
         component = report["components"]["service"]
         
-        assert "p50" in component
-        assert "p95" in component
-        assert "p99" in component
-        assert component["p50"] <= component["p95"]
-        assert component["p95"] <= component["p99"]
+        # Percentiles are nested under "latency"
+        latency = component["latency"]
+        assert "p50_ms" in latency
+        assert "p95_ms" in latency
+        assert "p99_ms" in latency
+        assert latency["p50_ms"] <= latency["p95_ms"]
+        assert latency["p95_ms"] <= latency["p99_ms"]

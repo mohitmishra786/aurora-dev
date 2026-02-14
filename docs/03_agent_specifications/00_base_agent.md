@@ -2,7 +2,7 @@
 
 The foundational class that all AURORA-DEV agents inherit from.
 
-**Last Updated:** February 8, 2026  
+**Last Updated:** February 14, 2026  
 **Audience:** Developers
 
 > **Before Reading This**
@@ -168,6 +168,29 @@ async def _call_claude(
     
     raise MaxRetriesExceeded(self.max_retries)
 ```
+
+### Budget Enforcement
+
+Every API call is gated by the `BudgetManager` singleton. If an agent exceeds its allocated token budget, `_call_api` returns immediately with a `budget_exceeded` error instead of making the network call:
+
+```python
+# Before making the API call
+if not _budget_manager.can_proceed(self._agent_id):
+    return AgentResponse(
+        content="",
+        stop_reason="budget_exceeded",
+        error="Agent budget exceeded. Cannot proceed.",
+    )
+
+# After successful API call
+_budget_manager.record_usage(
+    self._agent_id,
+    prompt_tokens=usage.input_tokens,
+    completion_tokens=usage.output_tokens,
+)
+```
+
+See [Cost Optimization](../04_core_concepts/cost_optimization.md) for budget configuration.
 
 ### Retry Logic
 

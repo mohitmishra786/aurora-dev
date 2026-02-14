@@ -2,7 +2,7 @@
 
 Putting the right brain on the right problem.
 
-**Last Updated:** February 8, 2026
+**Last Updated:** February 14, 2026
 **Audience:** Project Managers, Architects
 
 > **Before Reading This**
@@ -44,6 +44,27 @@ We estimate the "Complexity Score" of the task.
 - **Score > 7:** Route to Opus (Quality assurance).
 
 This saves ~40% on API bills without sacrificing quality on hard problems.
+
+## Context Window Fit
+
+Before assigning a task, Maestro estimates the token cost of the task (description + acceptance criteria + dependencies) using `estimate_tokens()`. If the estimate exceeds 80% of the target agent's model context limit, the agent scores `0.0` and is excluded:
+
+```python
+model_limit = MODEL_CONTEXT_LIMITS.get(agent_model, 128_000)
+task_tokens = self._estimate_task_tokens(task)
+if task_tokens > model_limit * 0.8:
+    return 0.0  # Agent can't fit this task
+```
+
+## Scoring Weights
+
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| Specialization | 0.35 | 1.0 for matching role, 0.3 otherwise |
+| Workload | 0.25 | Inverse of active task count |
+| Success rate | 0.20 | Historical completion ratio |
+| Recency | 0.10 | Fairness based on total assignments |
+| Round-robin | 0.10 | Rotation bonus for next expected agent |
 
 ## Hand-offs
 

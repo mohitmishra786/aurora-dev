@@ -2,8 +2,11 @@
 
 The diplomat connecting your system to the outside world.
 
-**Last Updated:** February 8, 2026
+**Last Updated:** February 14, 2026
 **Audience:** Developers, DevOps
+
+> [!NOTE]
+> As of February 2026, the `IntegrationAgent` has been consolidated into a single canonical implementation in `aurora_dev/agents/specialized/integration.py`. The previous duplicate in `developers.py` has been removed and replaced with a re-export for backwards compatibility.
 
 > **Before Reading This**
 >

@@ -2,7 +2,7 @@
 
 High-level architecture of AURORA-DEV's multi-agent autonomous software development system.
 
-**Last Updated:** February 8, 2026  
+**Last Updated:** February 14, 2026  
 **Audience:** Developers, Architects
 
 > **Before Reading This**
@@ -136,6 +136,8 @@ Get the code into production and keep it running.
 | LLM | Claude (Opus/Sonnet/Haiku) | Agent intelligence |
 | Orchestration | LangGraph | Workflow state machine |
 | Memory | Mem0 + Redis + PostgreSQL | Three-tier storage |
+| Embeddings | OpenAI / SentenceTransformers | Semantic vector search (local fallback) |
+| Re-ranking | CrossEncoder (ms-marco-MiniLM) | Precision re-ranking of memory results |
 | Queue | Celery + Redis | Async task processing |
 | API | FastAPI | REST/WebSocket interface |
 
@@ -160,10 +162,15 @@ Each agent handles one domain. The Backend Agent doesn't write CSS. The Frontend
 Agents work concurrently using Git worktrees. Backend and Frontend develop simultaneously, merging through structured conflict resolution.
 
 ### Self-Improvement
-Failed approaches feed the reflexion loop. The system learns from mistakes and applies lessons to future tasks.
+Failed approaches feed the reflexion loop. The system learns from mistakes and applies lessons to future tasks. Semantic memory retrieval (via embeddings and cross-encoder re-ranking) ensures relevant past lessons surface during planning.
 
 ### Cost Awareness
-Different tasks use different models. Planning uses Sonnet for quality. Test generation uses Haiku for speed. Complex debugging uses Opus.
+Different tasks use different models. Planning uses Sonnet for quality. Test generation uses Haiku for speed. Complex debugging uses Opus. The `BudgetManager` enforces hard spending limits at the API call level — agents that exhaust their allocation are automatically blocked.
+
+### Runtime Safety
+- **AgentHealthMonitor** polls agent status every 30 seconds and detects agents stuck for over 15 minutes
+- **ContextWindowValidator** ensures task token estimates fit within agent model context limits (80% threshold)
+- **Budget enforcement** gates every LLM call through `can_proceed()` checks
 
 ## Scalability
 

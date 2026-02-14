@@ -6,11 +6,13 @@ enabling semantic search and context retrieval across sessions.
 """
 import hashlib
 import json
+import struct
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Optional
 
+import numpy as np
 import httpx
 
 try:
@@ -19,10 +21,44 @@ try:
 except ImportError:
     PINECONE_AVAILABLE = False
 
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+
 from aurora_dev.core.config import get_settings
 from aurora_dev.core.logging import get_logger
+from aurora_dev.core.reranker import CrossEncoderReranker
 
 logger = get_logger(__name__)
+
+# Lazy-loaded local embedding model
+_local_embedding_model: Any = None
+_LOCAL_EMBEDDING_DIMENSION = 384  # all-MiniLM-L6-v2 output dim
+
+# Lazy-loaded cross-encoder reranker
+_reranker: Optional[CrossEncoderReranker] = None
+
+
+def _get_local_embedding_model() -> Any:
+    """Lazy-load SentenceTransformer for local semantic embeddings."""
+    global _local_embedding_model
+    if _local_embedding_model is None and SENTENCE_TRANSFORMERS_AVAILABLE:
+        try:
+            _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+            logger.info("Local embedding model loaded: all-MiniLM-L6-v2")
+        except Exception as e:
+            logger.warning(f"Failed to load local embedding model: {e}")
+    return _local_embedding_model
+
+
+def _get_reranker() -> Optional[CrossEncoderReranker]:
+    """Lazy-load cross-encoder reranker."""
+    global _reranker
+    if _reranker is None:
+        _reranker = CrossEncoderReranker()
+    return _reranker
 
 
 # Module-level embedding cache to avoid redundant API calls
@@ -209,21 +245,38 @@ class VectorStore:
             return self._fallback_embedding(text)
     
     def _fallback_embedding(self, text: str) -> list[float]:
-        """Generate deterministic hash-based embedding as fallback.
+        """Generate embeddings via fallback chain.
         
-        This produces consistent (not random) vectors based on content,
-        which provides basic deduplication but NOT semantic similarity.
+        Fallback chain (Audit 1.2):
+        1. Local SentenceTransformer (semantic similarity)
+        2. Hash-based (deduplication only, last resort)
         """
-        import struct
+        # Try local model first for real semantic search
+        local_model = _get_local_embedding_model()
+        if local_model is not None:
+            try:
+                embedding = local_model.encode(text).tolist()
+                dimension = self.settings.pinecone.dimension
+                # Pad/truncate to match configured dimension
+                if len(embedding) < dimension:
+                    embedding.extend([0.0] * (dimension - len(embedding)))
+                elif len(embedding) > dimension:
+                    embedding = embedding[:dimension]
+                return embedding
+            except Exception as e:
+                logger.warning(f"Local embedding failed, using hash fallback: {e}")
+        
+        # Last-resort: hash-based (no semantic similarity)
+        logger.warning(
+            "Using hash-based fallback embeddings. Install sentence-transformers "
+            "or set OPENAI_API_KEY for semantic search."
+        )
         dimension = self.settings.pinecone.dimension
-        # Use SHA-512 repeatedly to fill the dimension
-        result = []
+        result: list[float] = []
         seed = text.encode()
         while len(result) < dimension:
             seed = hashlib.sha512(seed).digest()
-            # Unpack 8 doubles from 64 bytes
             floats = struct.unpack('8d', seed)
-            # Normalize to [-1, 1]
             for f in floats:
                 if len(result) < dimension:
                     result.append((f % 2.0) - 1.0)
@@ -274,13 +327,15 @@ class VectorStore:
         query: str,
         top_k: int = 5,
         filter: Optional[dict[str, Any]] = None,
+        rerank: bool = True,
     ) -> list[SearchResult]:
-        """Search for similar content.
+        """Search for similar content with optional cross-encoder re-ranking.
         
         Args:
             query: Search query text.
             top_k: Number of results to return.
             filter: Optional metadata filter.
+            rerank: Whether to apply cross-encoder re-ranking (Audit 3.2).
             
         Returns:
             List of search results ordered by similarity.
@@ -288,9 +343,11 @@ class VectorStore:
         query_embedding = await self._get_embedding(query)
         
         index = self._get_index()
+        # Fetch more candidates for re-ranking
+        fetch_k = top_k * 3 if rerank else top_k
         results = index.query(
             vector=query_embedding,
-            top_k=top_k,
+            top_k=fetch_k,
             namespace=self.namespace,
             filter=filter,
             include_metadata=True,
@@ -307,6 +364,23 @@ class VectorStore:
                     metadata=metadata,
                 )
             )
+        
+        # Cross-encoder re-ranking (Audit 3.2)
+        if rerank and search_results:
+            reranker = _get_reranker()
+            if reranker and reranker.is_available:
+                search_results = reranker.rerank_search_results(
+                    query, search_results, top_k=top_k,
+                )
+                logger.debug(
+                    "Results re-ranked with cross-encoder",
+                    query_length=len(query),
+                    num_results=len(search_results),
+                )
+            else:
+                search_results = search_results[:top_k]
+        else:
+            search_results = search_results[:top_k]
         
         logger.debug(
             "Vector search completed",

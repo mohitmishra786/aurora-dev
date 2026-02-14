@@ -10,12 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 @pytest.fixture
 def mock_repo():
-    """Mock Git repository."""
-    with patch("aurora_dev.tools.git_worktree.Repo") as mock:
+    """Mock Git repository via git.Repo."""
+    with patch("aurora_dev.tools.git_worktree.git") as mock_git, \
+         patch("aurora_dev.tools.git_worktree.logger") as mock_logger:
         repo = MagicMock()
         repo.working_dir = "/tmp/test-repo"
         repo.bare = False
-        mock.return_value = repo
+        mock_git.Repo.return_value = repo
         yield repo
 
 

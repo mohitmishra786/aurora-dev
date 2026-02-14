@@ -2,7 +2,7 @@
 
 Deep dive into Maestro Agent and Memory Coordinator, the command center of AURORA-DEV.
 
-**Last Updated:** February 8, 2026  
+**Last Updated:** February 14, 2026  
 **Audience:** Developers, Architects
 
 > **Before Reading This**
@@ -101,6 +101,20 @@ For each task T:
     3. Assign to highest-scoring agent
     4. Update agent load metrics
 ```
+
+### Agent Health Monitoring
+
+The `LangGraphOrchestrator` starts an `AgentHealthMonitor` before each orchestration run. The monitor:
+- Polls agent status every 30 seconds
+- Detects agents stuck for over 15 minutes (no status change)
+- Invokes registered callbacks to log stuck agents and trigger recovery
+- Stops automatically when orchestration completes (via `finally` block)
+
+### Budget-Aware Assignment
+
+Maestro's `_score_agent()` integrates two additional pre-assignment checks:
+- **Budget check**: Each API call in `BaseAgent._call_api()` is gated by `BudgetManager.can_proceed()`. Agents that exceed their budget are blocked.
+- **Context window fit**: Tasks are estimated for token size. Agents whose model context limit is below 80% of the estimate score `0.0`.
 
 ## Memory Coordinator
 

@@ -2,7 +2,7 @@
 
 Evaluates technologies, discovers best practices, and provides implementation recommendations.
 
-**Last Updated:** February 8, 2026  
+**Last Updated:** February 14, 2026  
 **Audience:** Developers
 
 > **Before Reading This**
@@ -240,6 +240,13 @@ agents:
       - major open source projects
       - well-known engineering blogs
 ```
+
+## Known Limitation: Tool Integration
+
+> [!IMPORTANT]
+> The Research Agent currently relies on the LLM's internal training data via `_call_api` for research synthesis. While `research_tools.py` contains clients for GitHub, PyPI, and web search, the `ResearchAgent` execution loop does not yet invoke them at runtime. This means research output is based on the model's training cutoff rather than live data.
+>
+> **Planned fix:** Update the execution loop to call tool clients before LLM synthesis.
 
 ## Related Reading
 

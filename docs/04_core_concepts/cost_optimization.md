@@ -2,7 +2,7 @@
 
 Maximizing intelligence per dollar.
 
-**Last Updated:** February 8, 2026
+**Last Updated:** February 14, 2026
 **Audience:** Finance, Project Managers
 
 > **Before Reading This**
@@ -47,6 +47,15 @@ project:
 ```
 
 If the daily limit is reached, the `Maestro Agent` pauses all non-critical tasks and notifies the user. "I have stopped working to save your wallet. Approve more budget to continue."
+
+### Runtime Enforcement (BudgetManager)
+
+Budget limits are enforced at the API call level via `BudgetManager`, a shared singleton in `BaseAgent`. Before every Claude API call, `_call_api()` checks `can_proceed(agent_id)`. If the agent has exhausted its allocation, the call is blocked with a `budget_exceeded` error — no network request is made.
+
+After each successful call, token counts are recorded via `record_usage()`, maintaining a running total per agent. This provides:
+- Per-agent token tracking with prompt/completion breakdown
+- Hard-stop enforcement preventing runaway spend
+- Cost estimation based on model-specific token rates
 
 ## Token Reduction
 

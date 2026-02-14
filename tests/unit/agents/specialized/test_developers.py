@@ -181,7 +181,7 @@ class TestDatabaseAgent:
 
 @patch("aurora_dev.agents.base_agent.Anthropic")
 class TestIntegrationAgent:
-    """Tests for IntegrationAgent class."""
+    """Tests for IntegrationAgent class (canonical: integration.py)."""
 
     def setup_method(self):
         """Reset registry before each test."""
@@ -197,7 +197,7 @@ class TestIntegrationAgent:
         
         agent = IntegrationAgent()
         
-        assert agent.name == "IntegrationSpecialist"
+        assert agent.name == "Integration"
         assert agent.role == AgentRole.INTEGRATION
 
     def test_system_prompt_contains_responsibilities(self, mock_anthropic):
@@ -208,17 +208,17 @@ class TestIntegrationAgent:
         prompt = agent.system_prompt
         
         assert "third-party" in prompt
-        assert "OAuth" in prompt
         assert "circuit breaker" in prompt.lower()
+        assert "Data Mapping" in prompt
 
-    @patch("aurora_dev.agents.specialized.developers.IntegrationAgent._call_api")
-    def test_integrate_service(self, mock_api, mock_anthropic):
-        """Test service integration."""
+    @patch("aurora_dev.agents.specialized.integration.IntegrationAgent._call_api")
+    def test_design_integration(self, mock_api, mock_anthropic):
+        """Test service integration design."""
         from aurora_dev.agents.specialized.developers import IntegrationAgent
         from aurora_dev.agents.base_agent import AgentResponse, TokenUsage
         
         mock_api.return_value = AgentResponse(
-            content="class StripeClient: pass",
+            content='{"service": "Stripe", "integration_type": "rest"}',
             token_usage=TokenUsage(10, 50, 60),
             model="claude-3-5-haiku",
             stop_reason="end_turn",
@@ -226,10 +226,10 @@ class TestIntegrationAgent:
         )
         
         agent = IntegrationAgent()
-        result = agent.integrate_service(
-            service="Stripe",
-            operations=["create_payment", "refund"],
+        result = agent.design_integration(
+            service_name="Stripe",
+            api_docs="Stripe payment API docs",
         )
         
         assert result["service"] == "Stripe"
-        assert result["success"]
+

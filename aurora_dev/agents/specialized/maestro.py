@@ -12,6 +12,11 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from aurora_dev.core.context_window import (
+    MODEL_CONTEXT_LIMITS,
+    estimate_tokens,
+)
+
 from aurora_dev.agents.base_agent import (
     AgentResponse,
     AgentRole,
@@ -404,6 +409,17 @@ Output valid JSON with the task list.
         if cycle_assigned >= max_per_cycle:
             return 0.0
         
+        # Context window fit check (Audit 1.3)
+        agent_model = getattr(agent, "_model", getattr(agent, "model", "gpt-4o"))
+        model_limit = MODEL_CONTEXT_LIMITS.get(agent_model, 128_000)
+        task_tokens = self._estimate_task_tokens(task)
+        if task_tokens > model_limit * 0.8:  # 80% threshold
+            self._logger.debug(
+                f"Agent {agent.agent_id} context too small for task "
+                f"({task_tokens} > {int(model_limit * 0.8)})"
+            )
+            return 0.0
+        
         workload_score = 1.0 / (1.0 + active_tasks)
         
         # 3. Success rate
@@ -445,6 +461,23 @@ Output valid JSON with the task list.
         )
         
         return score
+    
+    def _estimate_task_tokens(self, task: "TaskDefinition") -> int:
+        """Estimate total tokens a task will consume (Audit 1.3).
+        
+        Considers task description, acceptance criteria, and dependencies.
+        """
+        text_parts = [
+            task.title or "",
+            task.description or "",
+        ]
+        if hasattr(task, "acceptance_criteria") and task.acceptance_criteria:
+            text_parts.extend(task.acceptance_criteria)
+        if hasattr(task, "dependencies") and task.dependencies:
+            text_parts.append(json.dumps(task.dependencies))
+        
+        full_text = "\n".join(text_parts)
+        return estimate_tokens(full_text)
     
     def _get_target_role(self, task: TaskDefinition) -> AgentRole:
         """Determine the target agent role for a task."""
