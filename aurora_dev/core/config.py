@@ -181,21 +181,18 @@ class GitHubSettings(BaseSettings):
 class AgentSettings(BaseSettings):
     """Agent-specific configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="AGENT_")
 
     default_model: str = Field(
-        default="claude-3-5-haiku-20241022",
-        alias="DEFAULT_MODEL",
-        description="Default Claude model to use",
+        default="claude-3-haiku-20240307",
+        description="Default Claude model to use (claude-3-haiku is cheapest at $0.25/$1.25 per 1M tokens)",
     )
     max_retries: int = Field(
         default=3,
-        alias="MAX_RETRIES",
         description="Maximum retry attempts for API calls",
     )
     default_timeout: int = Field(
         default=300,
-        alias="DEFAULT_TIMEOUT",
         description="Default timeout in seconds for agent operations",
     )
     reflexion_max_attempts: int = Field(
@@ -211,7 +208,45 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # Use case-sensitive env var parsing to avoid AGENT/agent conflict
+        populate_by_name=True,
     )
+
+    # Environment
+    debug: bool = Field(default=False, alias="DEBUG")
+    environment: str = Field(default="development", alias="ENVIRONMENT")
+
+    # Nested settings - use Field with default_factory to avoid env var conflicts
+    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
+    redis: RedisSettings = Field(default_factory=RedisSettings)
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    pinecone: PineconeSettings = Field(default_factory=PineconeSettings)
+    mem0: Mem0Settings = Field(default_factory=Mem0Settings)
+    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    github: GitHubSettings = Field(default_factory=GitHubSettings)
+
+    # Agent settings - explicitly construct to avoid AGENT env var conflict
+    agent: AgentSettings = Field(default_factory=lambda: AgentSettings())
+
+    @field_validator("agent", mode="before")
+    @classmethod
+    def validate_agent(cls, v):
+        """Handle the case where AGENT env var is set to a non-dict value."""
+        if isinstance(v, int) or (isinstance(v, str) and v.isdigit()):
+            # AGENT env var is set to a number, ignore it
+            return AgentSettings()
+        return v
+
+    @property
+    def is_development(self) -> bool:
+        """Check if running in development environment."""
+        return self.environment.lower() == "development"
+
+    @property
+    def is_production(self) -> bool:
+        """Check if running in production environment."""
+        return self.environment.lower() == "production"
 
     # Environment
     debug: bool = Field(default=False, alias="DEBUG")

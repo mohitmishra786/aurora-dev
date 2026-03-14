@@ -20,6 +20,7 @@ logger = get_logger(__name__)
 
 try:
     from langgraph.graph import StateGraph, END
+
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
@@ -27,6 +28,7 @@ except ImportError:
 
 class ProjectPhase(str, Enum):
     """Project lifecycle phases."""
+
     PLANNING = "planning"
     DESIGN = "design"
     IMPLEMENTATION = "implementation"
@@ -39,6 +41,7 @@ class ProjectPhase(str, Enum):
 
 class ProjectState(TypedDict):
     """State maintained across the orchestration graph."""
+
     project_id: str
     current_phase: str
     phase_results: dict[str, Any]
@@ -51,11 +54,11 @@ class ProjectState(TypedDict):
 
 class LangGraphOrchestrator:
     """LangGraph-based orchestrator wrapping the existing engine.
-    
+
     Uses LangGraph's StateGraph to define phase transitions as a
     directed graph with conditional edges. Each node delegates to
     the existing OrchestrationEngine's phase execution methods.
-    
+
     Example:
         >>> orchestrator = LangGraphOrchestrator(engine)
         >>> result = await orchestrator.run(project_id="my-project", goal="Build API")
@@ -63,29 +66,28 @@ class LangGraphOrchestrator:
 
     def __init__(self, engine: Optional[Any] = None) -> None:
         """Initialize with an optional existing OrchestrationEngine.
-        
+
         Args:
             engine: Existing OrchestrationEngine instance (optional).
         """
         if not LANGGRAPH_AVAILABLE:
             raise ImportError(
-                "langgraph is not installed. "
-                "Install it with: pip install langgraph"
+                "langgraph is not installed. " "Install it with: pip install langgraph"
             )
-        
+
         self._engine = engine
         self._graph = self._build_graph()
-        
+
         logger.info("LangGraph orchestrator initialized")
 
-    def _build_graph(self) -> "StateGraph":
+    def _build_graph(self) -> Any:
         """Build the LangGraph state machine.
-        
+
         Returns:
-            Compiled StateGraph with phase nodes and transitions.
+            Compiled LangGraph workflow (Pregel instance).
         """
         graph = StateGraph(ProjectState)
-        
+
         # Add phase nodes
         graph.add_node("planning", self._execute_planning)
         graph.add_node("design", self._execute_design)
@@ -93,10 +95,10 @@ class LangGraphOrchestrator:
         graph.add_node("testing", self._execute_testing)
         graph.add_node("review", self._execute_review)
         graph.add_node("deployment", self._execute_deployment)
-        
+
         # Set entry point
         graph.set_entry_point("planning")
-        
+
         # Add conditional edges
         graph.add_conditional_edges(
             "planning",
@@ -148,25 +150,25 @@ class LangGraphOrchestrator:
                 "failed": END,
             },
         )
-        
+
         return graph.compile()
 
     def _route_after_phase(self, state: ProjectState) -> str:
         """Determine the next phase based on current state.
-        
+
         Args:
             state: Current project state.
-            
+
         Returns:
             Name of the next phase or END.
         """
         current = state["current_phase"]
         error = state.get("error")
-        
+
         if error:
             logger.warning(f"Phase {current} failed: {error}")
             return "failed"
-        
+
         # Define phase transitions
         transitions = {
             ProjectPhase.PLANNING.value: "design",
@@ -176,7 +178,7 @@ class LangGraphOrchestrator:
             ProjectPhase.REVIEW.value: self._route_review(state),
             ProjectPhase.DEPLOYMENT.value: "completed",
         }
-        
+
         next_phase = transitions.get(current, "failed")
         logger.info(f"Transitioning from {current} to {next_phase}")
         return next_phase
@@ -201,7 +203,7 @@ class LangGraphOrchestrator:
         """Execute the planning phase."""
         state["current_phase"] = ProjectPhase.PLANNING.value
         logger.info(f"Executing planning phase for {state['project_id']}")
-        
+
         if self._engine:
             try:
                 result = await self._engine._execute_planning_phase(state["metadata"])
@@ -209,15 +211,30 @@ class LangGraphOrchestrator:
             except Exception as e:
                 state["error"] = str(e)
         else:
-            state["phase_results"]["planning"] = {"status": "completed"}
-        
+            # Placeholder execution when no engine is provided
+            state["phase_results"]["planning"] = {
+                "status": "completed",
+                "tasks": [
+                    {
+                        "id": "task-1",
+                        "description": "Analyze requirements",
+                        "status": "completed",
+                    },
+                    {
+                        "id": "task-2",
+                        "description": "Define scope",
+                        "status": "completed",
+                    },
+                ],
+            }
+
         return state
 
     async def _execute_design(self, state: ProjectState) -> ProjectState:
         """Execute the design phase."""
         state["current_phase"] = ProjectPhase.DESIGN.value
         logger.info(f"Executing design phase for {state['project_id']}")
-        
+
         if self._engine:
             try:
                 result = await self._engine._execute_design_phase(state["metadata"])
@@ -226,30 +243,32 @@ class LangGraphOrchestrator:
                 state["error"] = str(e)
         else:
             state["phase_results"]["design"] = {"status": "completed"}
-        
+
         return state
 
     async def _execute_implementation(self, state: ProjectState) -> ProjectState:
         """Execute the implementation phase."""
         state["current_phase"] = ProjectPhase.IMPLEMENTATION.value
         logger.info(f"Executing implementation phase for {state['project_id']}")
-        
+
         if self._engine:
             try:
-                result = await self._engine._execute_implementation_phase(state["metadata"])
+                result = await self._engine._execute_implementation_phase(
+                    state["metadata"]
+                )
                 state["phase_results"]["implementation"] = result or {}
             except Exception as e:
                 state["error"] = str(e)
         else:
             state["phase_results"]["implementation"] = {"status": "completed"}
-        
+
         return state
 
     async def _execute_testing(self, state: ProjectState) -> ProjectState:
         """Execute the testing phase."""
         state["current_phase"] = ProjectPhase.TESTING.value
         logger.info(f"Executing testing phase for {state['project_id']}")
-        
+
         if self._engine:
             try:
                 result = await self._engine._execute_testing_phase(state["metadata"])
@@ -257,15 +276,18 @@ class LangGraphOrchestrator:
             except Exception as e:
                 state["error"] = str(e)
         else:
-            state["phase_results"]["testing"] = {"status": "completed", "all_passed": True}
-        
+            state["phase_results"]["testing"] = {
+                "status": "completed",
+                "all_passed": True,
+            }
+
         return state
 
     async def _execute_review(self, state: ProjectState) -> ProjectState:
         """Execute the review phase."""
         state["current_phase"] = ProjectPhase.REVIEW.value
         logger.info(f"Executing review phase for {state['project_id']}")
-        
+
         if self._engine:
             try:
                 result = await self._engine._execute_review_phase(state["metadata"])
@@ -274,14 +296,14 @@ class LangGraphOrchestrator:
                 state["error"] = str(e)
         else:
             state["phase_results"]["review"] = {"status": "completed", "approved": True}
-        
+
         return state
 
     async def _execute_deployment(self, state: ProjectState) -> ProjectState:
         """Execute the deployment phase."""
         state["current_phase"] = ProjectPhase.DEPLOYMENT.value
         logger.info(f"Executing deployment phase for {state['project_id']}")
-        
+
         if self._engine:
             try:
                 result = await self._engine._execute_deployment_phase(state["metadata"])
@@ -290,7 +312,7 @@ class LangGraphOrchestrator:
                 state["error"] = str(e)
         else:
             state["phase_results"]["deployment"] = {"status": "completed"}
-        
+
         return state
 
     async def run(
@@ -300,12 +322,12 @@ class LangGraphOrchestrator:
         metadata: Optional[dict[str, Any]] = None,
     ) -> ProjectState:
         """Run the full orchestration pipeline.
-        
+
         Args:
             project_id: Project identifier.
             goal: High-level project goal.
             metadata: Additional project metadata.
-            
+
         Returns:
             Final ProjectState after all phases.
         """
@@ -323,24 +345,24 @@ class LangGraphOrchestrator:
             "completed_tasks": 0,
             "failed_tasks": 0,
         }
-        
+
         logger.info(f"Starting LangGraph orchestration for project {project_id}")
-        
+
         # Start health monitor (Audit 2.2)
         monitor = AgentHealthMonitor(
-            poll_interval_seconds=30,
-            stuck_threshold_seconds=900,  # 15 minutes
+            poll_interval=30,
+            stuck_threshold=900,  # 15 minutes
         )
-        
-        def _on_stuck(agent_id: str):
+
+        def _on_stuck(agent_id: str, task_id: Optional[str] = None):
             logger.warning(
                 f"Agent {agent_id} detected as stuck during orchestration "
                 f"of project {project_id}"
             )
-        
-        monitor.register_callback(_on_stuck)
+
+        monitor.on_stuck(_on_stuck)
         await monitor.start()
-        
+
         try:
             final_state = await self._graph.ainvoke(initial_state)
             logger.info(
@@ -358,7 +380,7 @@ class LangGraphOrchestrator:
 
     def get_graph_visualization(self) -> Optional[str]:
         """Get Mermaid diagram of the workflow graph.
-        
+
         Returns:
             Mermaid diagram string or None if not available.
         """

@@ -34,7 +34,7 @@ app.add_typer(config.app, name="config", help="Manage configuration")
 def version() -> None:
     """Show AURORA-DEV version information."""
     from aurora_dev import __version__
-    
+
     console.print(
         Panel(
             f"[bold blue]AURORA-DEV[/bold blue] v{__version__}",
@@ -47,19 +47,23 @@ def version() -> None:
 @app.command()
 def init(
     path: str = typer.Argument(".", help="Path to initialize project"),
-    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing config"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite existing config"
+    ),
 ) -> None:
     """Initialize AURORA-DEV in the current directory."""
     import os
     from pathlib import Path
-    
+
     target = Path(path).resolve()
     config_file = target / ".aurora.yaml"
-    
+
     if config_file.exists() and not force:
-        console.print("[yellow]⚠ Config file already exists. Use --force to overwrite.[/yellow]")
+        console.print(
+            "[yellow]⚠ Config file already exists. Use --force to overwrite.[/yellow]"
+        )
         raise typer.Exit(1)
-    
+
     # Create default config
     default_config = """# AURORA-DEV Configuration
 project:
@@ -83,7 +87,7 @@ settings:
 #   architect:
 #     design_depth: detailed
 """
-    
+
     config_file.write_text(default_config)
     console.print(f"[green]✓ Initialized AURORA-DEV config at {config_file}[/green]")
 
@@ -97,7 +101,9 @@ def run_project(
         "-m",
         help="Execution mode: auto (autonomous) or collaborative (human-in-the-loop)",
     ),
-    config_file: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
+    config_file: Optional[str] = typer.Option(
+        None, "--config", "-c", help="Config file path"
+    ),
     breakpoints: Optional[str] = typer.Option(
         None,
         "--breakpoints",
@@ -106,63 +112,159 @@ def run_project(
     ),
 ) -> None:
     """Run an AURORA-DEV project.
-    
+
     Modes:
       auto         - Fully autonomous execution with self-correction
       collaborative - Pauses at breakpoints for human review
     """
+    import asyncio
     from aurora_dev.core.config import get_settings
-    
+    from aurora_dev.core.orchestrator.dual_mode import (
+        DualModeOrchestrator,
+        ExecutionMode,
+        BreakpointConfig,
+    )
+    from aurora_dev.core.orchestrator.phase_executor import PhaseExecutor
+    from aurora_dev.core.state_machine.machine import StateMachine
+
     # Validate mode
     if mode not in ("auto", "collaborative"):
-        console.print(f"[red]✗ Invalid mode: {mode}. Use 'auto' or 'collaborative'[/red]")
+        console.print(
+            f"[red]✗ Invalid mode: {mode}. Use 'auto' or 'collaborative'[/red]"
+        )
         raise typer.Exit(1)
-    
+
     settings = get_settings()
-    
+
     if not settings.anthropic.api_key:
-        console.print("[red]✗ ANTHROPIC_API_KEY not set. Run: aurora config set api_key YOUR_KEY[/red]")
+        console.print(
+            "[red]✗ ANTHROPIC_API_KEY not set. Run: aurora config set api_key YOUR_KEY[/red]"
+        )
         raise typer.Exit(1)
-    
+
     # Display mode information
     mode_info = "autonomous" if mode == "auto" else "collaborative (human-in-the-loop)"
     console.print(f"[blue]▶ Starting in {mode_info} mode[/blue]")
-    
+
+    # Parse breakpoints
+    bp_config = BreakpointConfig()
     if mode == "collaborative":
         bp_list = ["post_design", "pre_deployment"]
         if breakpoints:
             bp_list = [b.strip() for b in breakpoints.split(",")]
         console.print(f"[dim]  Breakpoints: {', '.join(bp_list)}[/dim]")
-    
+        # Configure breakpoints based on user input
+        bp_config.post_design = "post_design" in bp_list
+        bp_config.pre_deployment = "pre_deployment" in bp_list
+
     if project_id:
         console.print(f"[blue]▶ Resuming project: {project_id}[/blue]")
     else:
         console.print("[blue]▶ Starting new project from config...[/blue]")
-    
-    # TODO: Implement actual project execution with DualModeOrchestrator
-    console.print("[yellow]⚠ Project execution not yet implemented[/yellow]")
+        # Generate a project ID if not provided
+        import uuid
+
+        project_id = str(uuid.uuid4())[:8]
+        console.print(f"[dim]  Generated project ID: {project_id}[/dim]")
+
+    # Initialize state machine
+    state_machine = StateMachine()
+
+    # Create workflow
+    workflow_id = f"workflow-{project_id}"
+    initial_data = {
+        "project_id": project_id,
+        "goal": "Build a full-stack application",
+        "tech_stack": ["python", "fastapi", "postgresql", "react"],
+    }
+    state_machine.create_workflow(
+        workflow_id=workflow_id,
+        initial_data=initial_data,
+    )
+
+    # Initialize orchestrator
+    exec_mode = (
+        ExecutionMode.AUTONOMOUS if mode == "auto" else ExecutionMode.COLLABORATIVE
+    )
+    orchestrator = DualModeOrchestrator(
+        state_machine=state_machine,
+        mode=exec_mode,
+        breakpoints=bp_config,
+    )
+
+    # Initialize phase executor
+    phase_executor = PhaseExecutor(project_id=project_id)
+
+    # Run the workflow
+    console.print(f"[blue]▶ Executing workflow {workflow_id}...[/blue]")
+
+    try:
+        # Create a sync wrapper that runs the async execute_phase
+        def phase_executor_wrapper(phase, context):
+            # Use a new event loop if needed
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            if loop.is_running():
+                # If loop is already running (shouldn't happen in CLI), run in thread
+                return asyncio.run_coroutine_threadsafe(
+                    phase_executor.execute_phase(phase, context), loop
+                ).result()
+            else:
+                return loop.run_until_complete(
+                    phase_executor.execute_phase(phase, context)
+                )
+
+        # Run async execution
+        result = asyncio.run(
+            orchestrator.execute(
+                workflow_id=workflow_id,
+                phase_executor=phase_executor_wrapper,
+            )
+        )
+
+        # Display results
+        if result.status == "completed":
+            console.print(f"[green]✓ Workflow completed successfully![/green]")
+            console.print(f"[dim]  Final phase: {result.current_phase.value}[/dim]")
+        elif result.status == "paused":
+            console.print(f"[yellow]⚠ Workflow paused for review[/yellow]")
+            console.print(f"[dim]  Current phase: {result.current_phase.value}[/dim]")
+        else:
+            console.print(f"[red]✗ Workflow failed: {result.error}[/red]")
+
+    except Exception as e:
+        console.print(f"[red]✗ Error executing workflow: {e}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
 def approve(
     workflow_id: str = typer.Argument(..., help="Workflow ID to approve"),
-    reject: bool = typer.Option(False, "--reject", "-r", help="Reject instead of approve"),
-    comment: Optional[str] = typer.Option(None, "--comment", "-c", help="Review comment"),
+    reject: bool = typer.Option(
+        False, "--reject", "-r", help="Reject instead of approve"
+    ),
+    comment: Optional[str] = typer.Option(
+        None, "--comment", "-c", help="Review comment"
+    ),
 ) -> None:
     """Approve or reject a paused workflow.
-    
+
     Examples:
       aurora approve wf-123          # Approve workflow
       aurora approve wf-123 -r       # Reject workflow
       aurora approve wf-123 -c "LGTM"  # Approve with comment
     """
     import httpx
-    
+
     # Default reviewer ID (would come from config in real implementation)
     reviewer_id = "cli-user"
-    
+
     action = "reject" if reject else "approve"
-    
+
     try:
         # Make API call to approval endpoint
         with httpx.Client(base_url="http://localhost:8000/api/v1") as client:
@@ -174,13 +276,15 @@ def approve(
                     "comments": comment,
                 },
             )
-            
+
             if response.status_code == 404:
                 console.print(f"[red]✗ Workflow not found: {workflow_id}[/red]")
                 raise typer.Exit(1)
             elif response.status_code == 400:
                 data = response.json()
-                console.print(f"[yellow]⚠ {data.get('detail', 'Workflow not awaiting approval')}[/yellow]")
+                console.print(
+                    f"[yellow]⚠ {data.get('detail', 'Workflow not awaiting approval')}[/yellow]"
+                )
                 raise typer.Exit(1)
             elif response.status_code == 200:
                 data = response.json()
@@ -189,45 +293,51 @@ def approve(
             else:
                 console.print(f"[red]✗ API error: {response.status_code}[/red]")
                 raise typer.Exit(1)
-                
+
     except httpx.ConnectError:
-        console.print("[red]✗ Cannot connect to AURORA-DEV API. Is the server running?[/red]")
+        console.print(
+            "[red]✗ Cannot connect to AURORA-DEV API. Is the server running?[/red]"
+        )
         raise typer.Exit(1)
 
 
 @app.command()
 def pending(
-    project_id: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project ID"),
+    project_id: Optional[str] = typer.Option(
+        None, "--project", "-p", help="Filter by project ID"
+    ),
 ) -> None:
     """List workflows awaiting human approval."""
     import httpx
     from rich.table import Table
-    
+
     try:
         with httpx.Client(base_url="http://localhost:8000/api/v1") as client:
             params = {}
             if project_id:
                 params["project_id"] = project_id
-                
+
             response = client.get("/workflows/pending-approvals", params=params)
-            
+
             if response.status_code != 200:
                 console.print(f"[red]✗ API error: {response.status_code}[/red]")
                 raise typer.Exit(1)
-            
+
             data = response.json()
-            
+
             if data["total"] == 0:
                 console.print("[green]✓ No workflows awaiting approval[/green]")
                 return
-            
-            table = Table(title=f"Pending Approvals ({data['total']})", show_header=True)
+
+            table = Table(
+                title=f"Pending Approvals ({data['total']})", show_header=True
+            )
             table.add_column("Workflow ID", style="cyan")
             table.add_column("Project", style="blue")
             table.add_column("Phase", style="magenta")
             table.add_column("Checkpoint", style="yellow")
             table.add_column("Paused At", style="dim")
-            
+
             for item in data["pending"]:
                 table.add_row(
                     item["workflow_id"],
@@ -236,37 +346,43 @@ def pending(
                     item.get("checkpoint") or "-",
                     item["paused_at"][:19],  # Trim timezone
                 )
-            
+
             console.print(table)
             console.print("\n[dim]Use 'aurora approve <workflow_id>' to approve[/dim]")
-            
+
     except httpx.ConnectError:
-        console.print("[red]✗ Cannot connect to AURORA-DEV API. Is the server running?[/red]")
+        console.print(
+            "[red]✗ Cannot connect to AURORA-DEV API. Is the server running?[/red]"
+        )
         raise typer.Exit(1)
 
 
 @app.command()
 def pause(
     workflow_id: str = typer.Argument(..., help="Workflow ID to pause"),
-    reason: Optional[str] = typer.Option(None, "--reason", "-r", help="Reason for pausing"),
+    reason: Optional[str] = typer.Option(
+        None, "--reason", "-r", help="Reason for pausing"
+    ),
 ) -> None:
     """Pause a running workflow for human review."""
     import httpx
-    
+
     try:
         with httpx.Client(base_url="http://localhost:8000/api/v1") as client:
             params = {}
             if reason:
                 params["reason"] = reason
-                
+
             response = client.post(f"/workflows/{workflow_id}/pause", params=params)
-            
+
             if response.status_code == 404:
                 console.print(f"[red]✗ Workflow not found: {workflow_id}[/red]")
                 raise typer.Exit(1)
             elif response.status_code == 400:
                 data = response.json()
-                console.print(f"[yellow]⚠ {data.get('detail', 'Cannot pause workflow')}[/yellow]")
+                console.print(
+                    f"[yellow]⚠ {data.get('detail', 'Cannot pause workflow')}[/yellow]"
+                )
                 raise typer.Exit(1)
             elif response.status_code == 200:
                 data = response.json()
@@ -275,9 +391,11 @@ def pause(
             else:
                 console.print(f"[red]✗ API error: {response.status_code}[/red]")
                 raise typer.Exit(1)
-                
+
     except httpx.ConnectError:
-        console.print("[red]✗ Cannot connect to AURORA-DEV API. Is the server running?[/red]")
+        console.print(
+            "[red]✗ Cannot connect to AURORA-DEV API. Is the server running?[/red]"
+        )
         raise typer.Exit(1)
 
 
@@ -287,17 +405,19 @@ def resume(
 ) -> None:
     """Resume a paused workflow (admin override)."""
     import httpx
-    
+
     try:
         with httpx.Client(base_url="http://localhost:8000/api/v1") as client:
             response = client.post(f"/workflows/{workflow_id}/resume")
-            
+
             if response.status_code == 404:
                 console.print(f"[red]✗ Workflow not found: {workflow_id}[/red]")
                 raise typer.Exit(1)
             elif response.status_code == 400:
                 data = response.json()
-                console.print(f"[yellow]⚠ {data.get('detail', 'Cannot resume workflow')}[/yellow]")
+                console.print(
+                    f"[yellow]⚠ {data.get('detail', 'Cannot resume workflow')}[/yellow]"
+                )
                 raise typer.Exit(1)
             elif response.status_code == 200:
                 data = response.json()
@@ -305,9 +425,11 @@ def resume(
             else:
                 console.print(f"[red]✗ API error: {response.status_code}[/red]")
                 raise typer.Exit(1)
-                
+
     except httpx.ConnectError:
-        console.print("[red]✗ Cannot connect to AURORA-DEV API. Is the server running?[/red]")
+        console.print(
+            "[red]✗ Cannot connect to AURORA-DEV API. Is the server running?[/red]"
+        )
         raise typer.Exit(1)
 
 
@@ -315,15 +437,15 @@ def resume(
 def agents() -> None:
     """List available agents and their status."""
     from rich.table import Table
-    
+
     from aurora_dev.agents.base_agent import AgentRole
-    
+
     table = Table(title="AURORA-DEV Agents", show_header=True)
     table.add_column("Agent", style="cyan")
     table.add_column("Tier", style="magenta")
     table.add_column("Role", style="green")
     table.add_column("Status", style="yellow")
-    
+
     # Define agent info
     agent_info = [
         ("Maestro", "1", "Orchestration", "Available"),
@@ -343,10 +465,10 @@ def agents() -> None:
         ("Documentation", "5", "Documentation", "Available"),
         ("Monitoring", "5", "Observability", "Available"),
     ]
-    
+
     for name, tier, role, status in agent_info:
         table.add_row(name, f"Tier {tier}", role, f"[green]●[/green] {status}")
-    
+
     console.print(table)
 
 
@@ -355,7 +477,9 @@ def agents() -> None:
 def new_project(
     name: str = typer.Argument(..., help="Project name"),
     project_type: str = typer.Option("fullstack", "--type", "-t", help="Project type"),
-    tech_stack: Optional[str] = typer.Option(None, "--tech", help="Comma-separated tech stack"),
+    tech_stack: Optional[str] = typer.Option(
+        None, "--tech", help="Comma-separated tech stack"
+    ),
 ) -> None:
     """Quick alias for 'aurora create project'."""
     create.project(name=name, project_type=project_type, tech_stack=tech_stack)
@@ -368,4 +492,3 @@ def cli() -> None:
 
 if __name__ == "__main__":
     cli()
-
